@@ -7,11 +7,7 @@
     "start": "node dist/server.js",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "tsx watch src/server.ts",
-    "dev:frontend": "cd frontend && npm run dev",
-    "build": "bash build.sh",
-    "build:frontend": "npm --prefix frontend install && npm --prefix frontend exec vite build",
-    "build:backend": "npx tsc",
-    "postinstall": "npm --prefix frontend install || true"
+    "dev:frontend": "cd frontend && npm run dev"
   },
   "keywords": [],
   "author": "",
