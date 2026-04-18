@@ -155,6 +155,8 @@ const GameStateSchema = z.object({
   dayCount: z.number().nonnegative().int(),
   winnerMessage: z.string().nullable(),
   timerStartedAt: z.number().nullable(),
+  nightTurnIndex: z.number().nonnegative().int(),
+  nightTurns: z.array(z.string()),
 });
 
 // Event payload schemas
@@ -185,6 +187,8 @@ export interface GameState {
   dayCount: number;
   winnerMessage: string | null;
   timerStartedAt: number | null;
+  nightTurnIndex: number; // Which night turn is currently executing (0 = first)
+  nightTurns: string[]; // Ordered list of role IDs for night actions
 }
 
 let gameState: GameState = {
@@ -200,6 +204,8 @@ let gameState: GameState = {
   dayCount: 0,
   winnerMessage: null,
   timerStartedAt: null,
+  nightTurnIndex: 0,
+  nightTurns: [],
 };
 
 let timerInterval: NodeJS.Timeout | null = null;
@@ -228,6 +234,138 @@ const validatePayload = <T>(data: unknown, schema: z.ZodSchema<T>): T | null => 
     throw error;
   }
 };
+
+// Process next night action in sequence
+function executeNextNightAction(): {
+  animationEvents: any[];
+  killedIds: string[];
+  complete: boolean;
+} {
+  const actions = gameState.nightActions;
+  const animationEvents: any[] = [];
+  const killedIds: string[] = [];
+
+  // Define night action order: Simão → Sombras → Maria → Pedro → Jesus
+  const nightActionOrder = [
+    "simao_zelote",
+    "sombra_ataca",
+    "maria_madalena",
+    "pedro",
+    "jesus",
+  ];
+
+  // Get remaining actions (not yet processed)
+  const remainingRoleIds = nightActionOrder.slice(gameState.nightTurnIndex);
+  if (remainingRoleIds.length === 0) {
+    return { animationEvents, killedIds, complete: true };
+  }
+
+  const currentRoleId = remainingRoleIds[0];
+  gameState.nightTurnIndex++;
+
+  // Find and execute actions for this role
+  const roleActions = actions.filter(
+    (a) => a.sourceRoleId === currentRoleId
+  );
+
+  if (currentRoleId === "simao_zelote") {
+    const simaoKill = roleActions[0]?.targetId;
+    if (simaoKill) {
+      const target = gameState.players.find((p) => p.id === simaoKill);
+      const simao = gameState.players.find((p) => p.roleId === "simao_zelote");
+      if (target && target.isAlive) {
+        animationEvents.push({ targetId: target.id, type: "attack" });
+        killPlayer(target.id, "eliminado", killedIds);
+        logEvent(`Simão eliminates ${target.name}`);
+
+        const luzRoles = [
+          "jesus",
+          "pedro",
+          "maria_madalena",
+          "joao",
+          "tome",
+          "nicodemos",
+          "zaqueu",
+          "jose_de_arimateia",
+          "o_publicano",
+        ];
+        if (target.roleId && luzRoles.includes(target.roleId)) {
+          if (simao && simao.isAlive) {
+            animationEvents.push({ targetId: simao.id, type: "attack" });
+            killPlayer(simao.id, "eliminado", killedIds);
+            logEvent(`Simão dies due to killing light (${target.name})`);
+          }
+        }
+      }
+    }
+  } else if (currentRoleId === "sombra_ataca") {
+    const attackedByShadows = roleActions.map((a) => a.targetId);
+    const protectedByPedro = actions.find(
+      (a) => a.actionType === "pedro_protege",
+    )?.targetId;
+    const caredByMaria = actions.find(
+      (a) => a.actionType === "maria_cuida",
+    )?.targetId;
+
+    for (const targetId of attackedByShadows) {
+      const target = gameState.players.find((p) => p.id === targetId);
+      if (!target || !target.isAlive) continue;
+
+      if (caredByMaria === targetId) {
+        animationEvents.push({ targetId, type: "protect" });
+        logEvent(`Maria protects ${target.name} from shadow attack`);
+      } else if (protectedByPedro === targetId) {
+        animationEvents.push({ targetId, type: "protect" });
+        logEvent(`Pedro protects ${target.name}, shadow takes random soldier`);
+
+        const soldados = gameState.players.filter(
+          (p) => p.roleId === "soldado_romano" && p.isAlive,
+        );
+        if (soldados.length > 0) {
+          const unluckySoldier =
+            soldados[Math.floor(Math.random() * soldados.length)];
+          animationEvents.push({
+            targetId: unluckySoldier.id,
+            type: "attack",
+          });
+          killPlayer(unluckySoldier.id, "eliminado", killedIds);
+          logEvent(`Random soldier ${unluckySoldier.name} killed`);
+        }
+      } else {
+        animationEvents.push({ targetId, type: "attack" });
+        killPlayer(targetId, "eliminado", killedIds);
+        logEvent(`${target.name} killed by shadows`);
+      }
+    }
+  } else if (currentRoleId === "maria_madalena") {
+    // Maria's action already processed in shadow phase
+    logEvent("Maria's action processed during shadow defense");
+  } else if (currentRoleId === "pedro") {
+    const protectedByPedro = roleActions[0]?.targetId;
+    if (protectedByPedro) {
+      gameState.pedroLastProtectedId = protectedByPedro;
+      const target = gameState.players.find((p) => p.id === protectedByPedro);
+      logEvent(`Pedro protects ${target?.name}`);
+    }
+  } else if (currentRoleId === "jesus") {
+    const jesusRevive = roleActions[0]?.targetId;
+    if (jesusRevive) {
+      const target = gameState.players.find((p) => p.id === jesusRevive);
+      if (target && !target.isAlive) {
+        target.isAlive = true;
+        target.deathReason = null;
+        animationEvents.push({ targetId: target.id, type: "revive" });
+        logEvent(`Jesus revives ${target.name}`);
+      }
+    }
+  }
+
+  return {
+    animationEvents,
+    killedIds,
+    complete: gameState.nightTurnIndex >= nightActionOrder.length,
+  };
+}
 
 function checkWinCondition() {
   if (
@@ -515,6 +653,8 @@ io.on("connection", (socket) => {
     gameState.jesusSacrificed = false;
     gameState.matiasTargetId = null;
     gameState.dayCount = 0;
+    gameState.nightTurnIndex = 0;
+    gameState.nightTurns = [];
     logEvent(`Game started with ${gameState.players.length} players`);
     io.emit("game_state_update", gameState);
   });
@@ -540,100 +680,16 @@ io.on("connection", (socket) => {
 
     if (validated === "day" && gameState.phase === "night") {
       gameState.dayCount++;
-      const actions = gameState.nightActions;
-
-      const attackedByShadows = actions
-        .filter((a) => a.actionType === "sombra_ataca")
-        .map((a) => a.targetId);
-      const protectedByPedro = actions.find(
-        (a) => a.actionType === "pedro_protege",
-      )?.targetId;
-      const caredByMaria = actions.find(
-        (a) => a.actionType === "maria_cuida",
-      )?.targetId;
-      const simaoKill = actions.find(
-        (a) => a.actionType === "simao_elimina",
-      )?.targetId;
-      const jesusRevive = actions.find(
-        (a) => a.actionType === "jesus_revive",
-      )?.targetId;
-
-      const animationEvents: any[] = [];
-      const killedIds: string[] = [];
-
-      if (simaoKill) {
-        const target = gameState.players.find((p) => p.id === simaoKill);
-        const simao = gameState.players.find(
-          (p) => p.roleId === "simao_zelote",
-        );
-        if (target && target.isAlive) {
-          animationEvents.push({ targetId: target.id, type: "attack" });
-          killPlayer(target.id, "eliminado", killedIds);
-
-          const luzRoles = [
-            "jesus",
-            "pedro",
-            "maria_madalena",
-            "joao",
-            "tome",
-            "nicodemos",
-            "zaqueu",
-            "jose_de_arimateia",
-            "o_publicano",
-          ];
-          if (target.roleId && luzRoles.includes(target.roleId)) {
-            if (simao && simao.isAlive) {
-              animationEvents.push({ targetId: simao.id, type: "attack" });
-              killPlayer(simao.id, "eliminado", killedIds);
-            }
-          }
-        }
-      }
-
-      if (attackedByShadows.length > 0) {
-        for (const targetId of attackedByShadows) {
-          const target = gameState.players.find((p) => p.id === targetId);
-          if (!target || !target.isAlive) continue;
-
-          if (caredByMaria === targetId) {
-            animationEvents.push({ targetId, type: "protect" });
-          } else if (protectedByPedro === targetId) {
-            animationEvents.push({ targetId, type: "protect" });
-
-            const soldados = gameState.players.filter(
-              (p) => p.roleId === "soldado_romano" && p.isAlive,
-            );
-            if (soldados.length > 0) {
-              const unluckySoldier =
-                soldados[Math.floor(Math.random() * soldados.length)];
-              animationEvents.push({
-                targetId: unluckySoldier.id,
-                type: "attack",
-              });
-              killPlayer(unluckySoldier.id, "eliminado", killedIds);
-            }
-          } else {
-            animationEvents.push({ targetId, type: "attack" });
-            killPlayer(targetId, "eliminado", killedIds);
-          }
-        }
-      }
-
-      if (jesusRevive) {
-        const target = gameState.players.find((p) => p.id === jesusRevive);
-        if (target && !target.isAlive) {
-          target.isAlive = true;
-          target.deathReason = null;
-          animationEvents.push({ targetId: target.id, type: "revive" });
-        }
-      }
-
-      if (gameState.jesusSacrificed) {
-        gameState.jesusSacrificed = false;
-      }
-
-      gameState.pedroLastProtectedId = protectedByPedro || null;
-      gameState.nightActions = [];
+      
+      // Initialize night turn system to process all actions in order
+      gameState.nightTurnIndex = 0;
+      gameState.nightTurns = [
+        "simao_zelote",
+        "sombra_ataca",
+        "maria_madalena",
+        "pedro",
+        "jesus",
+      ];
 
       // Start 5-minute timer with synchronization timestamp
       if (timerInterval) clearInterval(timerInterval);
@@ -648,12 +704,12 @@ io.on("connection", (socket) => {
           gameState.timerStartedAt = null;
         }
       }, 1000);
-
-      io.emit("play_animations", animationEvents);
     } else if (validated === "night" && gameState.phase === "day") {
       if (timerInterval) clearInterval(timerInterval);
       gameState.timer = null;
       gameState.timerStartedAt = null;
+      gameState.nightTurnIndex = 0;
+      gameState.nightTurns = [];
     }
 
     gameState.phase = validated;
@@ -870,7 +926,32 @@ io.on("connection", (socket) => {
       dayCount: 0,
       winnerMessage: null,
       timerStartedAt: null,
+      nightTurnIndex: 0,
+      nightTurns: [],
     };
+    io.emit("game_state_update", gameState);
+  });
+
+  socket.on("next_night_turn", () => {
+    // Advance to next night action turn
+    if (gameState.phase !== "night") {
+      console.warn("next_night_turn called outside night phase");
+      return;
+    }
+
+    const { animationEvents, killedIds, complete } = executeNextNightAction();
+
+    if (animationEvents.length > 0) {
+      io.emit("play_animations", animationEvents);
+    }
+
+    if (complete) {
+      // All night actions completed, signal ready for day phase
+      logEvent("Night phase actions completed, transitioning to day");
+      gameState.nightTurnIndex = 0;
+      gameState.nightTurns = [];
+    }
+
     io.emit("game_state_update", gameState);
   });
 
