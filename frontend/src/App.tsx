@@ -35,6 +35,7 @@ export interface GameState {
   matiasTargetId: string | null;
   dayCount: number;
   winnerMessage: string | null;
+  timerStartedAt: number | null;
 }
 
 interface GameContextType {
@@ -49,6 +50,18 @@ const GameContext = createContext<GameContextType>({
   animations: {},
 });
 export const useGame = () => useContext(GameContext);
+
+// Helper to calculate synchronized timer from timerStartedAt
+export const calculateSyncedTimer = (
+  timerStartedAt: number | null,
+  currentTimer: number | null,
+): number | null => {
+  if (!timerStartedAt || currentTimer === null) return currentTimer;
+  const TIMER_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+  const elapsed = Date.now() - timerStartedAt;
+  const remaining = Math.max(0, TIMER_DURATION_MS - elapsed);
+  return Math.ceil(remaining / 1000); // Return in seconds, rounded up
+};
 
 const ROLE_ABILITIES: Record<string, any[]> = {
   jesus: [
@@ -176,8 +189,19 @@ const Dashboard = () => {
         gameState.phase === "day" &&
         !gameState.winnerMessage && (
           <div className="text-4xl font-mono mb-8 p-6 bg-black/10 rounded-2xl shadow-inner font-bold tracking-widest text-slate-800">
-            {Math.floor(gameState.timer / 60)}:
-            {(gameState.timer % 60).toString().padStart(2, "0")}
+            {(() => {
+              const syncedTimer = calculateSyncedTimer(
+                gameState.timerStartedAt,
+                gameState.timer
+              );
+              const displayTimer = syncedTimer ?? gameState.timer;
+              return (
+                <>
+                  {Math.floor(displayTimer / 60)}:
+                  {(displayTimer % 60).toString().padStart(2, "0")}
+                </>
+              );
+            })()}
           </div>
         )}
 

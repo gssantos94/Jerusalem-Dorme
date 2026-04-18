@@ -154,6 +154,7 @@ const GameStateSchema = z.object({
   matiasTargetId: z.string().nullable(),
   dayCount: z.number().nonnegative().int(),
   winnerMessage: z.string().nullable(),
+  timerStartedAt: z.number().nullable(),
 });
 
 // Event payload schemas
@@ -183,6 +184,7 @@ export interface GameState {
   matiasTargetId: string | null;
   dayCount: number;
   winnerMessage: string | null;
+  timerStartedAt: number | null;
 }
 
 let gameState: GameState = {
@@ -197,6 +199,7 @@ let gameState: GameState = {
   matiasTargetId: null,
   dayCount: 0,
   winnerMessage: null,
+  timerStartedAt: null,
 };
 
 let timerInterval: NodeJS.Timeout | null = null;
@@ -505,6 +508,7 @@ io.on("connection", (socket) => {
     }
     gameState.phase = "night";
     gameState.timer = null;
+    gameState.timerStartedAt = null;
     gameState.nightActions = [];
     gameState.usedOneTimeAbilities = {};
     gameState.pedroLastProtectedId = null;
@@ -631,15 +635,17 @@ io.on("connection", (socket) => {
       gameState.pedroLastProtectedId = protectedByPedro || null;
       gameState.nightActions = [];
 
-      // Start 5-minute timer
+      // Start 5-minute timer with synchronization timestamp
       if (timerInterval) clearInterval(timerInterval);
       gameState.timer = 5 * 60;
+      gameState.timerStartedAt = Date.now();
       timerInterval = setInterval(() => {
         if (gameState.timer !== null && gameState.timer > 0) {
           gameState.timer--;
           io.emit("game_state_update", gameState);
         } else {
           if (timerInterval) clearInterval(timerInterval);
+          gameState.timerStartedAt = null;
         }
       }, 1000);
 
@@ -647,6 +653,7 @@ io.on("connection", (socket) => {
     } else if (validated === "night" && gameState.phase === "day") {
       if (timerInterval) clearInterval(timerInterval);
       gameState.timer = null;
+      gameState.timerStartedAt = null;
     }
 
     gameState.phase = validated;
@@ -862,6 +869,7 @@ io.on("connection", (socket) => {
       matiasTargetId: null,
       dayCount: 0,
       winnerMessage: null,
+      timerStartedAt: null,
     };
     io.emit("game_state_update", gameState);
   });
