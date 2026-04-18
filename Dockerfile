@@ -18,7 +18,9 @@ COPY frontend/tsconfig.json ./frontend/
 COPY frontend/tsconfig.app.json ./frontend/
 COPY frontend/tsconfig.node.json ./frontend/
 COPY frontend/index.html ./frontend/
-COPY frontend/public ./frontend/public 2>/dev/null || true
+
+# Copy public assets if they exist
+RUN mkdir -p ./frontend/public
 
 # Build frontend
 RUN cd frontend && npm run build && cd ..
