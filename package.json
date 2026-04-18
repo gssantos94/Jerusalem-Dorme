@@ -9,8 +9,9 @@
     "dev:backend": "tsx watch src/server.ts",
     "dev:frontend": "cd frontend && npm run dev",
     "build": "npm run build:frontend && npm run build:backend",
-    "build:frontend": "cd frontend && npm run build",
-    "build:backend": "tsc"
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "build:backend": "tsc",
+    "postinstall": "cd frontend && npm install"
   },
   "keywords": [],
   "author": "",
