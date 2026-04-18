@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  transition: background-color 0.5s ease;
+}
+
+.night-mode {
+  background-color: #0f172a;
+  color: #f8fafc;
+}
+
+.day-mode {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
