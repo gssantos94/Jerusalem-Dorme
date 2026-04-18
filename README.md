@@ -80,7 +80,11 @@ O app funciona em tempo real via WebSocket (Socket.IO), com estado em memoria no
 - `phase`: `'setup' | 'day' | 'night'`
 - `players`: lista de jogadores
 - `timer`: segundos restantes do dia (ou `null`)
+- `timerStartedAt`: timestamp Unix (ms) do inicio do timer para sincronizacao C-S
 - `nightActions`: fila de acoes noturnas
+- `nightTurnIndex`: indice do turno noturno atual (state machine)
+- `nightTurns`: lista ordenada de roles para processamento sequencial
+- `logs`: array de eventos do jogo com timestamp (ultimas 100 entradas)
 - `usedOneTimeAbilities`: mapa de habilidades unicas ja usadas
 - `pedroLastProtectedId`: ultimo alvo protegido por Pedro
 - `jesusSacrificed`: flag auxiliar de sacrificio
@@ -156,24 +160,31 @@ Regras especiais implementadas:
 - `start_game` muda fase para `night`.
 - Limpa timer, fila de acoes e flags auxiliares.
 - Zera contadores e vencedor.
+- Inicializa `nightTurnIndex = 0` para state machine.
 
 ### Transicao `night -> day`
 
 Ao `change_phase('day')`:
 
 1. Incrementa `dayCount`.
-2. Coleta fila `nightActions`.
-3. Resolve ordem pratica:
-   - `simao_elimina`
-   - ataques `sombra_ataca` (com interacoes de Maria/Pedro)
-   - `jesus_revive`
-4. Dispara animacoes para clientes.
-5. Limpa fila noturna.
-6. Inicia timer diurno de 5 minutos (300s), com broadcast por segundo.
+2. Inicializa state machine: `nightTurnIndex = 0`, `nightTurns` definido.
+3. Inicia timer diurno de 5 minutos (300s) com `timerStartedAt` para sincronizacao.
+4. Envia `game_state_update` para iniciar processamento.
+5. Cliente pode chamar `next_night_turn` repetidamente para processar cada turno sequencialmente.
+
+**Ordem de resolucao noturna:**
+- **Turno 1**: Simão Zelote (`simao_elimina`)
+- **Turno 2**: Sombras (`sombra_ataca`) com interacoes Maria/Pedro
+- **Turno 3**: Maria Madalena (processada junto com sombras)
+- **Turno 4**: Pedro (`pedro_protege`)
+- **Turno 5**: Jesus (`jesus_revive`)
+
+Cada turno dispara animacoes individuais. Ao final (`next_night_turn` retorna `complete: true`), fila e limpas.
 
 ### Transicao `day -> night`
 
-- Para timer diurno e remove contagem (`timer = null`).
+- Para timer diurno e remove contagem (`timer = null`, `timerStartedAt = null`).
+- Reseta `nightTurnIndex = 0` e `nightTurns = []`.
 
 ## 9) Condicoes de vitoria implementadas
 
@@ -212,17 +223,30 @@ Ao definir vencedor, o backend grava `winnerMessage` e encerra disputa por novas
 - `start_game`
 - `change_phase`
 - `queue_night_action`
+- `next_night_turn` (avanca state machine de turnos noturnos)
 - `use_one_time`
 - `set_matias_target`
 - `toggle_reveal`
 - `execute_action` (`kill`, `expel`, `revive`)
 - `reset_game`
 
-## 11) Persistencia e operacao
+### Endpoints HTTP
+
+- `GET /api/logs`: retorna array de eventos do jogo + snapshot do estado atual
+
+## 11) Persistencia, seguranca e operacao
 
 - Estado e **volatil em memoria** (reinicio do processo reinicia partida).
 - Nao ha autenticacao separada entre rotas no estado atual.
-- CORS configurado com `origin: '*'`.
+- **CORS configurado via env** (`ALLOWED_ORIGINS` do .env):
+  - Producao: configurable por variavel ambiente
+  - Desenvolvimento: localhost 5173-5175 + 3000
+- **Rate limiting habilitado**:
+  - HTTP: 100 requests/min por IP (express-rate-limit)
+  - Socket.IO: 10 events/sec por socket (custom middleware)
+- **Input validation**: todos os Socket.IO handlers validam com Zod schemas
+- **Logging de eventos**: ultimas 100 entradas com timestamp ISO
+- **Timer sincronizado**: cliente calcula tempo dinamicamente via `timerStartedAt`
 - Backend serve build estatico de `frontend/dist`.
 
 ## 12) Assets e convencoes visuais
@@ -254,3 +278,39 @@ Para build/producao:
 2. `npm start`
 3. Acesse `http://localhost:3000/`
 
+## 15) Melhorias implementadas - v0.0.1
+
+**Session 2 Improvements:**
+
+### Seguranca
+- ✅ **Rate Limiting**: HTTP 100/min + Socket.IO 10/sec (prevent DDoS/spam)
+- ✅ **Input Validation**: Zod schemas em todos os 11+ handlers Socket.IO
+- ✅ **CORS Configuravel**: Environment-based allowed origins
+
+### Confiabilidade
+- ✅ **Timer Sincronizado**: Client-server sync via `timerStartedAt` (elimina drift)
+- ✅ **Memory Leak Fixes**: Limpeza correta de timers em todas as transicoes
+- ✅ **Auto-Reconnect**: Socket.IO com retry automático em desconexões
+- ✅ **React.StrictMode Fix**: useRef para evitar duplicate connections em dev
+
+### Observabilidade
+- ✅ **Game Event Logging**: 100 eventos recentes com timestamp ISO
+- ✅ **Logs Endpoint**: `GET /api/logs` para debug e analise pos-jogo
+- ✅ **Structured Logging**: Contexto completo em cada evento (roles, targets, etc)
+
+### Game Logic
+- ✅ **Night Turn State Machine**: Processamento sequencial de acoes noturnas
+- ✅ **Per-Turn Animations**: Cada turno gera animacoes individuais
+- ✅ **Ordered Execution**: Simao → Sombras → Maria → Pedro → Jesus
+
+### Code Quality
+- ✅ Fisher-Yates shuffle (probabilidade uniforme)
+- ✅ Ananias/Safira deterministica com 7+ players
+- ✅ Semantic commits com trailers Co-authored-by
+- ✅ TypeScript strict mode + Zod validation
+
+### Deployment
+- ✅ Develop branch workflow (main <- PR from develop)
+- ✅ Environment configuration (.env / .env.example)
+- ✅ Build validation (npm run build)
+- ✅ Git tags para releases (v0.0.1)
