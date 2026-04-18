@@ -1,18 +1,49 @@
-import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
-import cors from 'cors';
-import path from 'path';
+import express from "express";
+import http from "http";
+import { Server } from "socket.io";
+import cors from "cors";
+import path from "path";
+import dotenv from "dotenv";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
+
+dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// CORS configuration from environment
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) || [
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+];
+
+// Rate limiting middleware for HTTP requests
+const httpLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 100, // 100 requests per minute
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(httpLimiter);
+
+app.use(
+  cors({
+    origin: ALLOWED_ORIGINS,
+    credentials: true,
+  }),
+);
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  }
+    origin: ALLOWED_ORIGINS,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
 });
 
 export interface Player {
@@ -21,7 +52,7 @@ export interface Player {
   roleId: string | null;
   isAlive: boolean;
   isRevealed: boolean;
-  deathReason?: 'eliminado' | 'expulso' | null;
+  deathReason?: "eliminado" | "expulso" | null;
 }
 
 export interface NightAction {
@@ -30,8 +61,121 @@ export interface NightAction {
   actionType: string;
 }
 
+function shuffle<T>(array: T[]): T[] {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// Validation helpers
+const isValidPlayerId = (playerId: string, gameState: GameState): boolean => {
+  return typeof playerId === "string" && 
+    gameState.players.some(p => p.id === playerId);
+};
+
+const isPlayerAlive = (playerId: string, gameState: GameState): boolean => {
+  return gameState.players.find(p => p.id === playerId)?.isAlive ?? false;
+};
+
+const isValidPhase = (phase: string): phase is "setup" | "day" | "night" => {
+  return ["setup", "day", "night"].includes(phase);
+};
+
+const isValidPhaseTransition = (currentPhase: string, newPhase: string): boolean => {
+  const transitions: Record<string, string[]> = {
+    setup: ["day"],
+    day: ["night", "setup"],
+    night: ["day", "setup"],
+  };
+  return (transitions[currentPhase] || []).includes(newPhase);
+};
+
+// Socket.IO rate limiting: track event frequency per socket
+const socketEventCounts: Record<string, Record<string, number>> = {};
+const SOCKET_RATE_LIMIT_WINDOW = 1000; // 1 second
+const SOCKET_RATE_LIMIT_MAX = 10; // Max 10 events per second per socket
+
+const checkSocketRateLimit = (socketId: string, eventName: string): boolean => {
+  if (!socketEventCounts[socketId]) {
+    socketEventCounts[socketId] = {};
+  }
+  
+  const now = Date.now();
+  const key = `${eventName}:${Math.floor(now / SOCKET_RATE_LIMIT_WINDOW)}`;
+  
+  if (!socketEventCounts[socketId][key]) {
+    socketEventCounts[socketId][key] = 0;
+  }
+  
+  socketEventCounts[socketId][key]++;
+  
+  // Cleanup old windows (older than 2 seconds)
+  Object.keys(socketEventCounts[socketId]).forEach((k) => {
+    const window = parseInt(k.split(":")[1]);
+    if (now / SOCKET_RATE_LIMIT_WINDOW - window > 2) {
+      delete socketEventCounts[socketId][k];
+    }
+  });
+  
+  return socketEventCounts[socketId][key] <= SOCKET_RATE_LIMIT_MAX;
+};
+
+// Zod schemas for Socket.IO event validation
+const PhaseSchema = z.enum(["setup", "day", "night"]);
+const DeathReasonSchema = z.enum(["eliminado", "expulso"]).nullable();
+
+const PlayerSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  roleId: z.string().nullable(),
+  isAlive: z.boolean(),
+  isRevealed: z.boolean(),
+  deathReason: DeathReasonSchema.optional(),
+});
+
+const NightActionSchema = z.object({
+  sourceRoleId: z.string().min(1),
+  targetId: z.string().min(1),
+  actionType: z.string().min(1),
+});
+
+const GameStateSchema = z.object({
+  phase: PhaseSchema,
+  players: z.array(PlayerSchema),
+  timer: z.number().nullable(),
+  nightActions: z.array(NightActionSchema),
+  logs: z.array(z.string()),
+  usedOneTimeAbilities: z.record(z.string(), z.boolean()),
+  pedroLastProtectedId: z.string().nullable(),
+  jesusSacrificed: z.boolean(),
+  matiasTargetId: z.string().nullable(),
+  dayCount: z.number().nonnegative().int(),
+  winnerMessage: z.string().nullable(),
+  timerStartedAt: z.number().nullable(),
+  nightTurnIndex: z.number().nonnegative().int(),
+  nightTurns: z.array(z.string()),
+});
+
+// Event payload schemas
+const UpdatePlayersSchema = z.array(PlayerSchema);
+const DistributeRolesSchema = z.object({});
+const StartGameSchema = z.object({});
+const ChangePhasSchema = PhaseSchema;
+const QueueNightActionSchema = NightActionSchema;
+const ExecuteActionSchema = z.object({
+  type: z.string().min(1),
+  targetId: z.string().min(1),
+});
+const UseOneTimeSchema = z.string().min(1);
+const SetMatiasTargetSchema = z.string().min(1);
+const ToggleRevealSchema = z.string().min(1);
+const ResetGameSchema = z.object({});
+
 export interface GameState {
-  phase: 'setup' | 'day' | 'night';
+  phase: "setup" | "day" | "night";
   players: Player[];
   timer: number | null;
   nightActions: NightAction[];
@@ -42,10 +186,13 @@ export interface GameState {
   matiasTargetId: string | null;
   dayCount: number;
   winnerMessage: string | null;
+  timerStartedAt: number | null;
+  nightTurnIndex: number; // Which night turn is currently executing (0 = first)
+  nightTurns: string[]; // Ordered list of role IDs for night actions
 }
 
 let gameState: GameState = {
-  phase: 'setup',
+  phase: "setup",
   players: [],
   timer: null,
   nightActions: [],
@@ -55,101 +202,317 @@ let gameState: GameState = {
   jesusSacrificed: false,
   matiasTargetId: null,
   dayCount: 0,
-  winnerMessage: null
+  winnerMessage: null,
+  timerStartedAt: null,
+  nightTurnIndex: 0,
+  nightTurns: [],
 };
 
 let timerInterval: NodeJS.Timeout | null = null;
 
-function checkWinCondition() {
-    if (gameState.phase === 'setup' || gameState.players.length === 0 || gameState.winnerMessage) return;
+// Helper function for logging game events
+const logEvent = (message: string) => {
+  const timestamp = new Date().toISOString();
+  const logEntry = `[${timestamp}] ${message}`;
+  gameState.logs.push(logEntry);
+  // Keep only last 100 logs to prevent memory bloat
+  if (gameState.logs.length > 100) {
+    gameState.logs = gameState.logs.slice(-100);
+  }
+  console.log(logEntry);
+};
 
-    const alivePlayers = gameState.players.filter(p => p.isAlive);
-    if (alivePlayers.length === 0) return;
-
-    const luzRoles = ['jesus', 'pedro', 'maria_madalena', 'joao', 'tome', 'nicodemos', 'zaqueu', 'jose_de_arimateia', 'o_publicano'];
-    const sombraRoles = ['rei_herodes', 'soldado_romano', 'fariseu', 'sumo_sacerdote'];
-    
-    let luzCount = 0;
-    let sombraCount = 0;
-    let judasCount = 0;
-    let casalCount = 0;
-    let otherNeutrosCount = 0;
-
-    for (const p of alivePlayers) {
-        if (luzRoles.includes(p.roleId || '')) luzCount++;
-        else if (sombraRoles.includes(p.roleId || '')) sombraCount++;
-        else if (p.roleId === 'judas') judasCount++;
-        else if (p.roleId === 'ananias' || p.roleId === 'safira') casalCount++;
-        else otherNeutrosCount++;
+// Helper function for validating with zod schemas
+const validatePayload = <T>(data: unknown, schema: z.ZodSchema<T>): T | null => {
+  try {
+    return schema.parse(data);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      console.warn(`Validation error: ${error.message}`);
+      return null;
     }
+    throw error;
+  }
+};
 
-    const isNight = gameState.phase === 'night';
-    let winnerMsg: string | null = null;
+// Process next night action in sequence
+function executeNextNightAction(): {
+  animationEvents: any[];
+  killedIds: string[];
+  complete: boolean;
+} {
+  const actions = gameState.nightActions;
+  const animationEvents: any[] = [];
+  const killedIds: string[] = [];
 
-    if (sombraCount === 0 && judasCount === 0 && casalCount === 0 && otherNeutrosCount === 0 && luzCount > 0) {
-        winnerMsg = "🕊️ A EQUIPE LUZ VENCEU! Todas as ameaças foram eliminadas.";
-    } else if (luzCount === 0 && judasCount === 0 && casalCount === 0 && otherNeutrosCount === 0 && sombraCount > 0) {
-        winnerMsg = "🌑 A EQUIPE DAS SOMBRAS VENCEU! A luz se apagou.";
-    } else if (alivePlayers.length === 2) {
-        if (luzCount === 1 && judasCount === 1) {
-            winnerMsg = "⛓️ JUDAS VENCEU! Ele sobreviveu até o fim com a luz.";
-        } else if (sombraCount === 1 && judasCount === 1) {
-            if (isNight) {
-                winnerMsg = "🌑 A EQUIPE DAS SOMBRAS VENCEU! A sombra eliminou Judas na última noite.";
-            } else {
-                winnerMsg = "⛓️ JUDAS VENCEU! Durante o dia, Judas manipulou a vila e venceu a sombra.";
-            }
+  // Define night action order: Simão → Sombras → Maria → Pedro → Jesus
+  const nightActionOrder = [
+    "simao_zelote",
+    "sombra_ataca",
+    "maria_madalena",
+    "pedro",
+    "jesus",
+  ];
+
+  // Get remaining actions (not yet processed)
+  const remainingRoleIds = nightActionOrder.slice(gameState.nightTurnIndex);
+  if (remainingRoleIds.length === 0) {
+    return { animationEvents, killedIds, complete: true };
+  }
+
+  const currentRoleId = remainingRoleIds[0];
+  gameState.nightTurnIndex++;
+
+  // Find and execute actions for this role
+  const roleActions = actions.filter(
+    (a) => a.sourceRoleId === currentRoleId
+  );
+
+  if (currentRoleId === "simao_zelote") {
+    const simaoKill = roleActions[0]?.targetId;
+    if (simaoKill) {
+      const target = gameState.players.find((p) => p.id === simaoKill);
+      const simao = gameState.players.find((p) => p.roleId === "simao_zelote");
+      if (target && target.isAlive) {
+        animationEvents.push({ targetId: target.id, type: "attack" });
+        killPlayer(target.id, "eliminado", killedIds);
+        logEvent(`Simão eliminates ${target.name}`);
+
+        const luzRoles = [
+          "jesus",
+          "pedro",
+          "maria_madalena",
+          "joao",
+          "tome",
+          "nicodemos",
+          "zaqueu",
+          "jose_de_arimateia",
+          "o_publicano",
+        ];
+        if (target.roleId && luzRoles.includes(target.roleId)) {
+          if (simao && simao.isAlive) {
+            animationEvents.push({ targetId: simao.id, type: "attack" });
+            killPlayer(simao.id, "eliminado", killedIds);
+            logEvent(`Simão dies due to killing light (${target.name})`);
+          }
         }
-    } else if (alivePlayers.length === 3) {
-        if (luzCount === 1 && casalCount === 2) {
-            winnerMsg = "👩‍❤️‍👨 ANANIAS E SAFIRA VENCERAM! Eles sobreviveram até o fim.";
-        } else if (sombraCount === 1 && casalCount === 2) {
-            if (isNight) {
-                winnerMsg = "🌑 A EQUIPE DAS SOMBRAS VENCEU! A sombra eliminou o casal na última noite.";
-            } else {
-                winnerMsg = "👩‍❤️‍👨 ANANIAS E SAFIRA VENCERAM! Eles expulsaram a sombra no último dia.";
-            }
-        }
+      }
     }
+  } else if (currentRoleId === "sombra_ataca") {
+    const attackedByShadows = roleActions.map((a) => a.targetId);
+    const protectedByPedro = actions.find(
+      (a) => a.actionType === "pedro_protege",
+    )?.targetId;
+    const caredByMaria = actions.find(
+      (a) => a.actionType === "maria_cuida",
+    )?.targetId;
 
-    if (winnerMsg) {
-        gameState.winnerMessage = winnerMsg;
-        gameState.logs.push(`🏆 FIM DE JOGO: ${winnerMsg}`);
+    for (const targetId of attackedByShadows) {
+      const target = gameState.players.find((p) => p.id === targetId);
+      if (!target || !target.isAlive) continue;
+
+      if (caredByMaria === targetId) {
+        animationEvents.push({ targetId, type: "protect" });
+        logEvent(`Maria protects ${target.name} from shadow attack`);
+      } else if (protectedByPedro === targetId) {
+        animationEvents.push({ targetId, type: "protect" });
+        logEvent(`Pedro protects ${target.name}, shadow takes random soldier`);
+
+        const soldados = gameState.players.filter(
+          (p) => p.roleId === "soldado_romano" && p.isAlive,
+        );
+        if (soldados.length > 0) {
+          const unluckySoldier =
+            soldados[Math.floor(Math.random() * soldados.length)];
+          animationEvents.push({
+            targetId: unluckySoldier.id,
+            type: "attack",
+          });
+          killPlayer(unluckySoldier.id, "eliminado", killedIds);
+          logEvent(`Random soldier ${unluckySoldier.name} killed`);
+        }
+      } else {
+        animationEvents.push({ targetId, type: "attack" });
+        killPlayer(targetId, "eliminado", killedIds);
+        logEvent(`${target.name} killed by shadows`);
+      }
     }
+  } else if (currentRoleId === "maria_madalena") {
+    // Maria's action already processed in shadow phase
+    logEvent("Maria's action processed during shadow defense");
+  } else if (currentRoleId === "pedro") {
+    const protectedByPedro = roleActions[0]?.targetId;
+    if (protectedByPedro) {
+      gameState.pedroLastProtectedId = protectedByPedro;
+      const target = gameState.players.find((p) => p.id === protectedByPedro);
+      logEvent(`Pedro protects ${target?.name}`);
+    }
+  } else if (currentRoleId === "jesus") {
+    const jesusRevive = roleActions[0]?.targetId;
+    if (jesusRevive) {
+      const target = gameState.players.find((p) => p.id === jesusRevive);
+      if (target && !target.isAlive) {
+        target.isAlive = true;
+        target.deathReason = null;
+        animationEvents.push({ targetId: target.id, type: "revive" });
+        logEvent(`Jesus revives ${target.name}`);
+      }
+    }
+  }
+
+  return {
+    animationEvents,
+    killedIds,
+    complete: gameState.nightTurnIndex >= nightActionOrder.length,
+  };
 }
 
-function killPlayer(targetId: string, reason: 'eliminado' | 'expulso', killedIds: string[]) {
-  const target = gameState.players.find(p => p.id === targetId);
+function checkWinCondition() {
+  if (
+    gameState.phase === "setup" ||
+    gameState.players.length === 0 ||
+    gameState.winnerMessage
+  )
+    return;
+
+  const alivePlayers = gameState.players.filter((p) => p.isAlive);
+  if (alivePlayers.length === 0) return;
+
+  const luzRoles = [
+    "jesus",
+    "pedro",
+    "maria_madalena",
+    "joao",
+    "tome",
+    "nicodemos",
+    "zaqueu",
+    "jose_de_arimateia",
+    "o_publicano",
+  ];
+  const sombraRoles = [
+    "rei_herodes",
+    "soldado_romano",
+    "fariseu",
+    "sumo_sacerdote",
+  ];
+
+  let luzCount = 0;
+  let sombraCount = 0;
+  let judasCount = 0;
+  let casalCount = 0;
+  let otherNeutrosCount = 0;
+
+  for (const p of alivePlayers) {
+    if (luzRoles.includes(p.roleId || "")) luzCount++;
+    else if (sombraRoles.includes(p.roleId || "")) sombraCount++;
+    else if (p.roleId === "judas") judasCount++;
+    else if (p.roleId === "ananias" || p.roleId === "safira") casalCount++;
+    else otherNeutrosCount++;
+  }
+
+  const isNight = gameState.phase === "night";
+  let winnerMsg: string | null = null;
+
+  if (
+    sombraCount === 0 &&
+    judasCount === 0 &&
+    casalCount === 0 &&
+    otherNeutrosCount === 0 &&
+    luzCount > 0
+  ) {
+    winnerMsg = "🕊️ A EQUIPE LUZ VENCEU! Todas as ameaças foram eliminadas.";
+  } else if (
+    luzCount === 0 &&
+    judasCount === 0 &&
+    casalCount === 0 &&
+    otherNeutrosCount === 0 &&
+    sombraCount > 0
+  ) {
+    winnerMsg = "🌑 A EQUIPE DAS SOMBRAS VENCEU! A luz se apagou.";
+  } else if (alivePlayers.length === 2) {
+    if (luzCount === 1 && judasCount === 1) {
+      winnerMsg = "⛓️ JUDAS VENCEU! Ele sobreviveu até o fim com a luz.";
+    } else if (sombraCount === 1 && judasCount === 1) {
+      if (isNight) {
+        winnerMsg =
+          "🌑 A EQUIPE DAS SOMBRAS VENCEU! A sombra eliminou Judas na última noite.";
+      } else {
+        winnerMsg =
+          "⛓️ JUDAS VENCEU! Durante o dia, Judas manipulou a vila e venceu a sombra.";
+      }
+    }
+  } else if (alivePlayers.length === 3) {
+    if (luzCount === 1 && casalCount === 2) {
+      winnerMsg = "👩‍❤️‍👨 ANANIAS E SAFIRA VENCERAM! Eles sobreviveram até o fim.";
+    } else if (sombraCount === 1 && casalCount === 2) {
+      if (isNight) {
+        winnerMsg =
+          "🌑 A EQUIPE DAS SOMBRAS VENCEU! A sombra eliminou o casal na última noite.";
+      } else {
+        winnerMsg =
+          "👩‍❤️‍👨 ANANIAS E SAFIRA VENCERAM! Eles expulsaram a sombra no último dia.";
+      }
+    }
+  }
+
+  if (winnerMsg) {
+    gameState.winnerMessage = winnerMsg;
+    logEvent(`🏆 GAME END: ${winnerMsg}`);
+    // Stop timer when game ends
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+  }
+}
+
+function killPlayer(
+  targetId: string,
+  reason: "eliminado" | "expulso",
+  killedIds: string[],
+) {
+  const target = gameState.players.find((p) => p.id === targetId);
   if (!target || !target.isAlive) return;
 
   target.isAlive = false;
   target.deathReason = reason;
   killedIds.push(targetId);
-  
+
+  const roleLabel = target.roleId ? ` (${target.roleId})` : "";
+  logEvent(`Player ${target.name}${roleLabel} was ${reason === "eliminado" ? "killed" : "expelled"}`);
+
   let currentRole = target.roleId;
 
-  if (currentRole === 'ananias') {
-    const safira = gameState.players.find(p => p.roleId === 'safira' && p.isAlive);
+  if (currentRole === "ananias") {
+    const safira = gameState.players.find(
+      (p) => p.roleId === "safira" && p.isAlive,
+    );
     if (safira) {
       safira.isAlive = false;
       safira.deathReason = reason;
       killedIds.push(safira.id);
+      logEvent(`Safira (couple) also died with Ananias`);
     }
-  } else if (currentRole === 'safira') {
-    const ananias = gameState.players.find(p => p.roleId === 'ananias' && p.isAlive);
+  } else if (currentRole === "safira") {
+    const ananias = gameState.players.find(
+      (p) => p.roleId === "ananias" && p.isAlive,
+    );
     if (ananias) {
       ananias.isAlive = false;
       ananias.deathReason = reason;
       killedIds.push(ananias.id);
+      logEvent(`Ananias (couple) also died with Safira`);
     }
   }
 
-  if (currentRole === 'jesus' && reason === 'eliminado') {
-      gameState.jesusSacrificed = true;
+  if (currentRole === "jesus" && reason === "eliminado") {
+    gameState.jesusSacrificed = true;
   }
 
   if (gameState.matiasTargetId === targetId) {
-    const matias = gameState.players.find(p => p.roleId === 'matias' && p.isAlive);
+    const matias = gameState.players.find(
+      (p) => p.roleId === "matias" && p.isAlive,
+    );
     if (matias) {
       matias.roleId = currentRole;
       gameState.matiasTargetId = null;
@@ -157,197 +520,401 @@ function killPlayer(targetId: string, reason: 'eliminado' | 'expulso', killedIds
   }
 }
 
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+io.on("connection", (socket) => {
+  console.log("User connected:", socket.id);
 
-  socket.emit('game_state_update', gameState);
+  socket.emit("game_state_update", gameState);
 
-  socket.on('update_players', (newPlayers: Player[]) => {
-    if (gameState.phase === 'setup') {
-      gameState.players = newPlayers;
-      io.emit('game_state_update', gameState);
+  socket.on("update_players", (newPlayers: Player[]) => {
+    if (!checkSocketRateLimit(socket.id, "update_players")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded update_players limit`);
+      return;
     }
+
+    // Validate with zod schema
+    const validated = validatePayload(newPlayers, UpdatePlayersSchema);
+    if (!validated) {
+      console.warn("Invalid newPlayers payload");
+      return;
+    }
+
+    // Only allow updates during setup phase
+    if (gameState.phase !== "setup") {
+      console.warn("Cannot update players outside setup phase");
+      return;
+    }
+
+    gameState.players = validated;
+    logEvent(`Players updated: ${validated.map(p => p.name).join(", ")}`);
+    io.emit("game_state_update", gameState);
   });
 
-  socket.on('distribute_roles', () => {
-    const uniqueRoles = ['jesus', 'maria_madalena', 'pedro', 'judas', 'fariseu', 'joao', 'jose_de_arimateia', 'matias', 'nicodemos', 'o_publicano', 'rei_herodes', 'simao_zelote', 'sumo_sacerdote', 'tome', 'zaqueu'];
+  socket.on("distribute_roles", () => {
+    if (!checkSocketRateLimit(socket.id, "distribute_roles")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded distribute_roles limit`);
+      return;
+    }
+
+    // Only allow during setup phase
+    if (gameState.phase !== "setup") {
+      console.warn("Cannot distribute roles outside setup phase");
+      return;
+    }
+
+    // Must have at least 1 player
+    if (gameState.players.length === 0) {
+      console.warn("Cannot distribute roles: no players");
+      return;
+    }
+
+    const uniqueRoles = [
+      "jesus",
+      "maria_madalena",
+      "pedro",
+      "judas",
+      "fariseu",
+      "joao",
+      "jose_de_arimateia",
+      "matias",
+      "nicodemos",
+      "o_publicano",
+      "rei_herodes",
+      "simao_zelote",
+      "sumo_sacerdote",
+      "tome",
+      "zaqueu",
+    ];
     const rolesToAssign: string[] = [];
-    
-    // Always pair Ananias and Safira if added
-    if (gameState.players.length >= 7 && Math.random() > 0.5) {
-        rolesToAssign.push('ananias', 'safira');
+
+    // Always include Ananias and Safira if 7+ players (deterministic)
+    if (gameState.players.length >= 7) {
+      rolesToAssign.push("ananias", "safira");
     }
 
-    const shuffledUnique = [...uniqueRoles].sort(() => 0.5 - Math.random());
-    
+    // Shuffle unique roles using Fisher-Yates algorithm
+    const shuffledUnique = shuffle([...uniqueRoles]);
+
     while (rolesToAssign.length < gameState.players.length) {
-        if (shuffledUnique.length > 0) {
-            rolesToAssign.push(shuffledUnique.pop()!);
-        } else {
-            rolesToAssign.push('soldado_romano');
-        }
+      if (shuffledUnique.length > 0) {
+        rolesToAssign.push(shuffledUnique.pop()!);
+      } else {
+        rolesToAssign.push("soldado_romano");
+      }
     }
-    rolesToAssign.sort(() => 0.5 - Math.random());
     
-    const playersWithRoles = gameState.players.map((p, idx) => ({ ...p, roleId: rolesToAssign[idx] }));
+    // Final shuffle to randomize positions
+    const finalRoles = shuffle(rolesToAssign);
+
+    const playersWithRoles = gameState.players.map((p, idx) => ({
+      ...p,
+      roleId: finalRoles[idx],
+    }));
     gameState.players = playersWithRoles;
-    io.emit('game_state_update', gameState);
+    const rolesSummary = gameState.players.map(p => `${p.name}=${p.roleId}`).join(", ");
+    logEvent(`Roles distributed: ${rolesSummary}`);
+    io.emit("game_state_update", gameState);
   });
 
-  socket.on('start_game', () => {
-    gameState.phase = 'night';
+  socket.on("start_game", () => {
+    if (!checkSocketRateLimit(socket.id, "start_game")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded start_game limit`);
+      return;
+    }
+
+    // Only allow from setup phase
+    if (gameState.phase !== "setup") {
+      console.warn("Cannot start game from phase:", gameState.phase);
+      return;
+    }
+
+    // Must have at least 1 player
+    if (gameState.players.length === 0) {
+      console.warn("Cannot start game: no players");
+      return;
+    }
+
+    // All players must have roles assigned
+    if (gameState.players.some(p => !p.roleId)) {
+      console.warn("Cannot start game: not all players have roles assigned");
+      return;
+    }
+
+    // Clear any existing timer
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+    gameState.phase = "night";
     gameState.timer = null;
+    gameState.timerStartedAt = null;
     gameState.nightActions = [];
     gameState.usedOneTimeAbilities = {};
     gameState.pedroLastProtectedId = null;
     gameState.jesusSacrificed = false;
     gameState.matiasTargetId = null;
     gameState.dayCount = 0;
-    if (timerInterval) clearInterval(timerInterval);
-    io.emit('game_state_update', gameState);
+    gameState.nightTurnIndex = 0;
+    gameState.nightTurns = [];
+    logEvent(`Game started with ${gameState.players.length} players`);
+    io.emit("game_state_update", gameState);
   });
 
-  socket.on('change_phase', (newPhase: 'setup' | 'day' | 'night') => {
-    if (newPhase === 'day' && gameState.phase === 'night') {
-        gameState.dayCount++;
-        const actions = gameState.nightActions;
-        
-        const attackedByShadows = actions.filter(a => a.actionType === 'sombra_ataca').map(a => a.targetId);
-        const protectedByPedro = actions.find(a => a.actionType === 'pedro_protege')?.targetId;
-        const caredByMaria = actions.find(a => a.actionType === 'maria_cuida')?.targetId;
-        const simaoKill = actions.find(a => a.actionType === 'simao_elimina')?.targetId;
-        const jesusRevive = actions.find(a => a.actionType === 'jesus_revive')?.targetId;
+  socket.on("change_phase", (newPhase: "setup" | "day" | "night") => {
+    if (!checkSocketRateLimit(socket.id, "change_phase")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded change_phase limit`);
+      return;
+    }
 
-        const animationEvents: any[] = [];
-        const killedIds: string[] = [];
+    // Validate with zod schema
+    const validated = validatePayload(newPhase, ChangePhasSchema);
+    if (!validated) {
+      console.warn("Invalid phase payload");
+      return;
+    }
 
-        if (simaoKill) {
-           const target = gameState.players.find(p=>p.id===simaoKill);
-           const simao = gameState.players.find(p=>p.roleId==='simao_zelote');
-           if (target && target.isAlive) {
-               animationEvents.push({ targetId: target.id, type: 'attack' });
-               killPlayer(target.id, 'eliminado', killedIds);
-               
-               const luzRoles = ['jesus', 'pedro', 'maria_madalena', 'joao', 'tome', 'nicodemos', 'zaqueu', 'jose_de_arimateia', 'o_publicano'];
-               if (target.roleId && luzRoles.includes(target.roleId)) {
-                   if (simao && simao.isAlive) {
-                       animationEvents.push({ targetId: simao.id, type: 'attack' });
-                       killPlayer(simao.id, 'eliminado', killedIds);
-                   }
-               }
-           }
+    // Validate phase transition
+    if (!isValidPhaseTransition(gameState.phase, validated)) {
+      console.warn(`Invalid transition from ${gameState.phase} to ${validated}`);
+      return;
+    }
+
+    if (validated === "day" && gameState.phase === "night") {
+      gameState.dayCount++;
+      
+      // Initialize night turn system to process all actions in order
+      gameState.nightTurnIndex = 0;
+      gameState.nightTurns = [
+        "simao_zelote",
+        "sombra_ataca",
+        "maria_madalena",
+        "pedro",
+        "jesus",
+      ];
+
+      // Start 5-minute timer with synchronization timestamp
+      if (timerInterval) clearInterval(timerInterval);
+      gameState.timer = 5 * 60;
+      gameState.timerStartedAt = Date.now();
+      timerInterval = setInterval(() => {
+        if (gameState.timer !== null && gameState.timer > 0) {
+          gameState.timer--;
+          io.emit("game_state_update", gameState);
+        } else {
+          if (timerInterval) clearInterval(timerInterval);
+          gameState.timerStartedAt = null;
         }
+      }, 1000);
+    } else if (validated === "night" && gameState.phase === "day") {
+      if (timerInterval) clearInterval(timerInterval);
+      gameState.timer = null;
+      gameState.timerStartedAt = null;
+      gameState.nightTurnIndex = 0;
+      gameState.nightTurns = [];
+    }
 
-        if (attackedByShadows.length > 0) {
-            for (const targetId of attackedByShadows) {
-                const target = gameState.players.find(p=>p.id===targetId);
-                if (!target || !target.isAlive) continue;
+    gameState.phase = validated;
+    logEvent(`Phase changed to ${validated} (Day ${gameState.dayCount})`);
+    checkWinCondition();
+    io.emit("game_state_update", gameState);
+  });
 
-                if (caredByMaria === targetId) {
-                    animationEvents.push({ targetId, type: 'protect' });
-                } else if (protectedByPedro === targetId) {
-                    animationEvents.push({ targetId, type: 'protect' });
-                    
-                    const soldados = gameState.players.filter(p=>p.roleId === 'soldado_romano' && p.isAlive);
-                    if (soldados.length > 0) {
-                        const unluckySoldier = soldados[Math.floor(Math.random() * soldados.length)];
-                        animationEvents.push({ targetId: unluckySoldier.id, type: 'attack' });
-                        killPlayer(unluckySoldier.id, 'eliminado', killedIds);
-                    }
-                } else {
-                    animationEvents.push({ targetId, type: 'attack' });
-                    killPlayer(targetId, 'eliminado', killedIds);
-                }
-            }
-        }
+  socket.on("queue_night_action", (actionData: NightAction) => {
+    if (!checkSocketRateLimit(socket.id, "queue_night_action")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded queue_night_action limit`);
+      return;
+    }
 
-        if (jesusRevive) {
-            const target = gameState.players.find(p=>p.id===jesusRevive);
-            if (target && !target.isAlive) {
-                target.isAlive = true;
-                target.deathReason = null;
-                animationEvents.push({ targetId: target.id, type: 'revive' });
-            }
-        }
+    // Validate with zod schema
+    const validated = validatePayload(actionData, QueueNightActionSchema);
+    if (!validated) {
+      console.warn("Invalid night action payload");
+      return;
+    }
 
-        if (gameState.jesusSacrificed) {
-            gameState.jesusSacrificed = false; 
-        }
+    // Validate phase
+    if (gameState.phase !== "night") {
+      console.warn("queue_night_action called outside night phase");
+      return;
+    }
 
-        gameState.pedroLastProtectedId = protectedByPedro || null;
-        gameState.nightActions = [];
-        
-        // Start 5-minute timer
-        if (timerInterval) clearInterval(timerInterval);
-        gameState.timer = 5 * 60;
-        timerInterval = setInterval(() => {
-           if (gameState.timer !== null && gameState.timer > 0) {
-              gameState.timer--;
-              io.emit('game_state_update', gameState);
-           } else {
-              if (timerInterval) clearInterval(timerInterval);
-           }
-        }, 1000);
+    // Validate source and target exist and are alive
+    const source = gameState.players.find(p => p.roleId === validated.sourceRoleId && p.isAlive);
+    if (!source) {
+      console.warn("Invalid source for night action:", validated.sourceRoleId);
+      return;
+    }
 
-        io.emit('play_animations', animationEvents);
+    if (!isValidPlayerId(validated.targetId, gameState)) {
+      console.warn("Invalid target player ID:", validated.targetId);
+      return;
+    }
 
-    } else if (newPhase === 'night' && gameState.phase === 'day') {
-        if (timerInterval) clearInterval(timerInterval);
-        gameState.timer = null;
+    const target = gameState.players.find(p => p.id === validated.targetId);
+    if (!target) {
+      console.warn("Target player not found:", validated.targetId);
+      return;
+    }
+
+    gameState.nightActions = gameState.nightActions.filter(
+      (a) => a.sourceRoleId !== validated.sourceRoleId,
+    );
+    gameState.nightActions.push(validated);
+    logEvent(`Night action queued: ${validated.sourceRoleId} -> ${validated.targetId} (${validated.actionType})`);
+    io.emit("game_state_update", gameState);
+  });
+
+  socket.on("use_one_time", (abilityId: string) => {
+    if (!checkSocketRateLimit(socket.id, "use_one_time")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded use_one_time limit`);
+      return;
+    }
+
+    // Validate with zod schema
+    const validated = validatePayload(abilityId, UseOneTimeSchema);
+    if (!validated) {
+      console.warn("Invalid ability ID payload");
+      return;
     }
     
-    gameState.phase = newPhase;
-    checkWinCondition();
-    io.emit('game_state_update', gameState);
-  });
-
-  socket.on('queue_night_action', (actionData: NightAction) => {
-      gameState.nightActions = gameState.nightActions.filter(a => a.sourceRoleId !== actionData.sourceRoleId);
-      gameState.nightActions.push(actionData);
-      io.emit('game_state_update', gameState);
-  });
-
-  socket.on('use_one_time', (abilityId: string) => {
-      gameState.usedOneTimeAbilities[abilityId] = true;
-      io.emit('game_state_update', gameState);
-  });
-
-  socket.on('set_matias_target', (targetId: string) => {
-      gameState.matiasTargetId = targetId;
-      io.emit('game_state_update', gameState);
-  });
-
-  socket.on('toggle_reveal', (targetId: string) => {
-      const target = gameState.players.find(p => p.id === targetId);
-      if (target) {
-          target.isRevealed = !target.isRevealed;
-          io.emit('game_state_update', gameState);
-      }
-  });
-
-  socket.on('execute_action', (actionData: any) => {
-    if (actionData.type === 'kill') {
-      killPlayer(actionData.targetId, 'eliminado', []);
-      io.emit('play_animations', [{ targetId: actionData.targetId, type: 'attack' }]);
-    } else if (actionData.type === 'expel') {
-      killPlayer(actionData.targetId, 'expulso', []);
-      io.emit('play_animations', [{ targetId: actionData.targetId, type: 'expel' }]);
-    } else if (actionData.type === 'revive') {
-      const target = gameState.players.find(p => p.id === actionData.targetId);
-      if (target) {
-        target.isAlive = true;
-        target.deathReason = null;
-        io.emit('play_animations', [{ targetId: actionData.targetId, type: 'revive' }]);
-      }
+    if (gameState.usedOneTimeAbilities[validated]) {
+      console.warn("Ability already used:", validated);
+      return;
     }
-    checkWinCondition();
-    io.emit('game_state_update', gameState);
+    
+    gameState.usedOneTimeAbilities[validated] = true;
+    logEvent(`One-time ability used: ${validated}`);
+    io.emit("game_state_update", gameState);
   });
 
-  socket.on('reset_game', () => {
-    if (timerInterval) clearInterval(timerInterval);
+  socket.on("set_matias_target", (targetId: string) => {
+    if (!checkSocketRateLimit(socket.id, "set_matias_target")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded set_matias_target limit`);
+      return;
+    }
+
+    // Validate with zod schema
+    const validated = validatePayload(targetId, SetMatiasTargetSchema);
+    if (!validated) {
+      console.warn("Invalid Matias target payload");
+      return;
+    }
+
+    if (!isValidPlayerId(validated, gameState)) {
+      console.warn("Invalid Matias target:", validated);
+      return;
+    }
+    
+    if (!isPlayerAlive(validated, gameState)) {
+      console.warn("Matias target is not alive:", validated);
+      return;
+    }
+    
+    gameState.matiasTargetId = validated;
+    const targetPlayer = gameState.players.find(p => p.id === validated);
+    logEvent(`Matias target set to ${targetPlayer?.name || validated}`);
+    io.emit("game_state_update", gameState);
+  });
+
+  socket.on("toggle_reveal", (targetId: string) => {
+    if (!checkSocketRateLimit(socket.id, "toggle_reveal")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded toggle_reveal limit`);
+      return;
+    }
+
+    // Validate with zod schema
+    const validated = validatePayload(targetId, ToggleRevealSchema);
+    if (!validated) {
+      console.warn("Invalid toggle_reveal target payload");
+      return;
+    }
+
+    if (!isValidPlayerId(validated, gameState)) {
+      console.warn("Invalid toggle_reveal target:", validated);
+      return;
+    }
+    
+    const target = gameState.players.find((p) => p.id === validated);
+    if (target) {
+      target.isRevealed = !target.isRevealed;
+      logEvent(`${target.name} reveal status toggled: ${target.isRevealed}`);
+      io.emit("game_state_update", gameState);
+    }
+  });
+
+  socket.on("execute_action", (actionData: any) => {
+    if (!checkSocketRateLimit(socket.id, "execute_action")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded execute_action limit`);
+      return;
+    }
+
+    // Validate with zod schema
+    const validated = validatePayload(actionData, ExecuteActionSchema);
+    if (!validated) {
+      console.warn("Invalid execute_action payload");
+      return;
+    }
+
+    // Validate target exists
+    if (!isValidPlayerId(validated.targetId, gameState)) {
+      console.warn("Invalid execute_action target:", validated.targetId);
+      return;
+    }
+
+    const target = gameState.players.find(p => p.id === validated.targetId);
+    if (!target) {
+      console.warn("Target not found:", validated.targetId);
+      return;
+    }
+
+    if (validated.type === "kill") {
+      if (!target.isAlive) {
+        console.warn("Cannot kill already dead player:", validated.targetId);
+        return;
+      }
+      killPlayer(validated.targetId, "eliminado", []);
+      io.emit("play_animations", [
+        { targetId: validated.targetId, type: "attack" },
+      ]);
+    } else if (validated.type === "expel") {
+      if (!target.isAlive) {
+        console.warn("Cannot expel already dead player:", validated.targetId);
+        return;
+      }
+      killPlayer(validated.targetId, "expulso", []);
+      io.emit("play_animations", [
+        { targetId: validated.targetId, type: "expel" },
+      ]);
+    } else if (validated.type === "revive") {
+      if (target.isAlive) {
+        console.warn("Cannot revive already alive player:", validated.targetId);
+        return;
+      }
+      target.isAlive = true;
+      target.deathReason = null;
+      io.emit("play_animations", [
+        { targetId: validated.targetId, type: "revive" },
+      ]);
+    } else {
+      console.warn("Unknown action type:", validated.type);
+      return;
+    }
+    
+    checkWinCondition();
+    io.emit("game_state_update", gameState);
+  });
+
+  socket.on("reset_game", () => {
+    if (!checkSocketRateLimit(socket.id, "reset_game")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded reset_game limit`);
+      return;
+    }
+
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
     gameState = {
-      phase: 'setup',
+      phase: "setup",
       players: [],
       timer: null,
       nightActions: [],
@@ -357,21 +924,61 @@ io.on('connection', (socket) => {
       jesusSacrificed: false,
       matiasTargetId: null,
       dayCount: 0,
-      winnerMessage: null
+      winnerMessage: null,
+      timerStartedAt: null,
+      nightTurnIndex: 0,
+      nightTurns: [],
     };
-    io.emit('game_state_update', gameState);
+    io.emit("game_state_update", gameState);
   });
 
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+  socket.on("next_night_turn", () => {
+    // Advance to next night action turn
+    if (gameState.phase !== "night") {
+      console.warn("next_night_turn called outside night phase");
+      return;
+    }
+
+    const { animationEvents, killedIds, complete } = executeNextNightAction();
+
+    if (animationEvents.length > 0) {
+      io.emit("play_animations", animationEvents);
+    }
+
+    if (complete) {
+      // All night actions completed, signal ready for day phase
+      logEvent("Night phase actions completed, transitioning to day");
+      gameState.nightTurnIndex = 0;
+      gameState.nightTurns = [];
+    }
+
+    io.emit("game_state_update", gameState);
+  });
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
   });
 });
 
-const frontendPath = path.join(__dirname, '../../frontend/dist');
+const frontendPath = path.join(__dirname, "../../frontend/dist");
 app.use(express.static(frontendPath));
 
+// Endpoint to retrieve game logs (useful for debugging)
+app.get("/api/logs", (req, res) => {
+  res.json({
+    logs: gameState.logs,
+    gameState: {
+      phase: gameState.phase,
+      playerCount: gameState.players.length,
+      alivePlayers: gameState.players.filter(p => p.isAlive).length,
+      dayCount: gameState.dayCount,
+      winnerMessage: gameState.winnerMessage,
+    }
+  });
+});
+
 app.use((req, res) => {
-  res.sendFile(path.join(frontendPath, 'index.html'));
+  res.sendFile(path.join(frontendPath, "index.html"));
 });
 
 const PORT = process.env.PORT || 3000;
