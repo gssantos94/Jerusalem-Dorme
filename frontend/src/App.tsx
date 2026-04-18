@@ -686,24 +686,30 @@ export default function App() {
   const [animations, setAnimations] = useState<Record<string, string>>({});
 
   const animTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectingRef = useRef(false);
 
   useEffect(() => {
     const backendUrl =
       import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
 
-    if (socket) return; // Avoid duplicate connections
+    if (socket || connectingRef.current) return; // Avoid duplicate connections
+
+    connectingRef.current = true;
+    console.log(`[Socket.io] Tentando conectar a ${backendUrl}`);
 
     const newSocket = io(backendUrl, {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
-      reconnectionAttempts: 5,
+      reconnectionAttempts: 10,
+      timeout: 20000,
+      transports: ["websocket", "polling"],
     });
 
     setSocket(newSocket);
 
     newSocket.on("connect", () => {
-      console.log("Socket connected");
+      console.log("[Socket.io] ✓ Conectado");
     });
 
     newSocket.on("game_state_update", (state: GameState) => {
@@ -729,23 +735,23 @@ export default function App() {
     );
 
     newSocket.on("disconnect", () => {
-      console.log("Socket disconnected");
+      console.log("[Socket.io] ✗ Desconectado");
       setGameState(null);
     });
 
     newSocket.on("connect_error", (error) => {
-      console.error("Connection error:", error);
+      console.error("[Socket.io] ✗ Erro de conexão:", error);
     });
 
     newSocket.on("error", (error) => {
-      console.error("Socket error:", error);
+      console.error("[Socket.io] ✗ Erro Socket:", error);
     });
 
     return () => {
       if (animTimeoutRef.current) clearTimeout(animTimeoutRef.current);
-      newSocket.close();
+      // Don't close socket - keep persistent connection
     };
-  }, [socket]);
+  }, []);
 
   return (
     <GameContext.Provider value={{ gameState, socket, animations }}>
@@ -753,6 +759,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="*" element={<Dashboard />} />
         </Routes>
       </BrowserRouter>
     </GameContext.Provider>
