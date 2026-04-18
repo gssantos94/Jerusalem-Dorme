@@ -201,6 +201,18 @@ let gameState: GameState = {
 
 let timerInterval: NodeJS.Timeout | null = null;
 
+// Helper function for logging game events
+const logEvent = (message: string) => {
+  const timestamp = new Date().toISOString();
+  const logEntry = `[${timestamp}] ${message}`;
+  gameState.logs.push(logEntry);
+  // Keep only last 100 logs to prevent memory bloat
+  if (gameState.logs.length > 100) {
+    gameState.logs = gameState.logs.slice(-100);
+  }
+  console.log(logEntry);
+};
+
 // Helper function for validating with zod schemas
 const validatePayload = <T>(data: unknown, schema: z.ZodSchema<T>): T | null => {
   try {
@@ -304,7 +316,7 @@ function checkWinCondition() {
 
   if (winnerMsg) {
     gameState.winnerMessage = winnerMsg;
-    gameState.logs.push(`🏆 FIM DE JOGO: ${winnerMsg}`);
+    logEvent(`🏆 GAME END: ${winnerMsg}`);
     // Stop timer when game ends
     if (timerInterval) {
       clearInterval(timerInterval);
@@ -325,6 +337,9 @@ function killPlayer(
   target.deathReason = reason;
   killedIds.push(targetId);
 
+  const roleLabel = target.roleId ? ` (${target.roleId})` : "";
+  logEvent(`Player ${target.name}${roleLabel} was ${reason === "eliminado" ? "killed" : "expelled"}`);
+
   let currentRole = target.roleId;
 
   if (currentRole === "ananias") {
@@ -335,6 +350,7 @@ function killPlayer(
       safira.isAlive = false;
       safira.deathReason = reason;
       killedIds.push(safira.id);
+      logEvent(`Safira (couple) also died with Ananias`);
     }
   } else if (currentRole === "safira") {
     const ananias = gameState.players.find(
@@ -344,6 +360,7 @@ function killPlayer(
       ananias.isAlive = false;
       ananias.deathReason = reason;
       killedIds.push(ananias.id);
+      logEvent(`Ananias (couple) also died with Safira`);
     }
   }
 
@@ -387,6 +404,7 @@ io.on("connection", (socket) => {
     }
 
     gameState.players = validated;
+    logEvent(`Players updated: ${validated.map(p => p.name).join(", ")}`);
     io.emit("game_state_update", gameState);
   });
 
@@ -451,6 +469,8 @@ io.on("connection", (socket) => {
       roleId: finalRoles[idx],
     }));
     gameState.players = playersWithRoles;
+    const rolesSummary = gameState.players.map(p => `${p.name}=${p.roleId}`).join(", ");
+    logEvent(`Roles distributed: ${rolesSummary}`);
     io.emit("game_state_update", gameState);
   });
 
@@ -491,6 +511,7 @@ io.on("connection", (socket) => {
     gameState.jesusSacrificed = false;
     gameState.matiasTargetId = null;
     gameState.dayCount = 0;
+    logEvent(`Game started with ${gameState.players.length} players`);
     io.emit("game_state_update", gameState);
   });
 
@@ -629,6 +650,7 @@ io.on("connection", (socket) => {
     }
 
     gameState.phase = validated;
+    logEvent(`Phase changed to ${validated} (Day ${gameState.dayCount})`);
     checkWinCondition();
     io.emit("game_state_update", gameState);
   });
@@ -674,6 +696,7 @@ io.on("connection", (socket) => {
       (a) => a.sourceRoleId !== validated.sourceRoleId,
     );
     gameState.nightActions.push(validated);
+    logEvent(`Night action queued: ${validated.sourceRoleId} -> ${validated.targetId} (${validated.actionType})`);
     io.emit("game_state_update", gameState);
   });
 
@@ -696,6 +719,7 @@ io.on("connection", (socket) => {
     }
     
     gameState.usedOneTimeAbilities[validated] = true;
+    logEvent(`One-time ability used: ${validated}`);
     io.emit("game_state_update", gameState);
   });
 
@@ -723,6 +747,8 @@ io.on("connection", (socket) => {
     }
     
     gameState.matiasTargetId = validated;
+    const targetPlayer = gameState.players.find(p => p.id === validated);
+    logEvent(`Matias target set to ${targetPlayer?.name || validated}`);
     io.emit("game_state_update", gameState);
   });
 
@@ -747,6 +773,7 @@ io.on("connection", (socket) => {
     const target = gameState.players.find((p) => p.id === validated);
     if (target) {
       target.isRevealed = !target.isRevealed;
+      logEvent(`${target.name} reveal status toggled: ${target.isRevealed}`);
       io.emit("game_state_update", gameState);
     }
   });
@@ -846,6 +873,20 @@ io.on("connection", (socket) => {
 
 const frontendPath = path.join(__dirname, "../../frontend/dist");
 app.use(express.static(frontendPath));
+
+// Endpoint to retrieve game logs (useful for debugging)
+app.get("/api/logs", (req, res) => {
+  res.json({
+    logs: gameState.logs,
+    gameState: {
+      phase: gameState.phase,
+      playerCount: gameState.players.length,
+      alivePlayers: gameState.players.filter(p => p.isAlive).length,
+      dayCount: gameState.dayCount,
+      winnerMessage: gameState.winnerMessage,
+    }
+  });
+});
 
 app.use((req, res) => {
   res.sendFile(path.join(frontendPath, "index.html"));
