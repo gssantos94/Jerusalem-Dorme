@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import cors from "cors";
 import path from "path";
 import dotenv from "dotenv";
+import rateLimit from "express-rate-limit";
 
 dotenv.config();
 
@@ -16,6 +17,17 @@ const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.tri
   "http://localhost:5174",
   "http://localhost:5175",
 ];
+
+// Rate limiting middleware for HTTP requests
+const httpLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 100, // 100 requests per minute
+  message: "Too many requests from this IP, please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(httpLimiter);
 
 app.use(
   cors({
@@ -78,6 +90,36 @@ const isValidPhaseTransition = (currentPhase: string, newPhase: string): boolean
     night: ["day", "setup"],
   };
   return (transitions[currentPhase] || []).includes(newPhase);
+};
+
+// Socket.IO rate limiting: track event frequency per socket
+const socketEventCounts: Record<string, Record<string, number>> = {};
+const SOCKET_RATE_LIMIT_WINDOW = 1000; // 1 second
+const SOCKET_RATE_LIMIT_MAX = 10; // Max 10 events per second per socket
+
+const checkSocketRateLimit = (socketId: string, eventName: string): boolean => {
+  if (!socketEventCounts[socketId]) {
+    socketEventCounts[socketId] = {};
+  }
+  
+  const now = Date.now();
+  const key = `${eventName}:${Math.floor(now / SOCKET_RATE_LIMIT_WINDOW)}`;
+  
+  if (!socketEventCounts[socketId][key]) {
+    socketEventCounts[socketId][key] = 0;
+  }
+  
+  socketEventCounts[socketId][key]++;
+  
+  // Cleanup old windows (older than 2 seconds)
+  Object.keys(socketEventCounts[socketId]).forEach((k) => {
+    const window = parseInt(k.split(":")[1]);
+    if (now / SOCKET_RATE_LIMIT_WINDOW - window > 2) {
+      delete socketEventCounts[socketId][k];
+    }
+  });
+  
+  return socketEventCounts[socketId][key] <= SOCKET_RATE_LIMIT_MAX;
 };
 
 export interface GameState {
@@ -264,6 +306,11 @@ io.on("connection", (socket) => {
   socket.emit("game_state_update", gameState);
 
   socket.on("update_players", (newPlayers: Player[]) => {
+    if (!checkSocketRateLimit(socket.id, "update_players")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded update_players limit`);
+      return;
+    }
+
     // Only allow updates during setup phase
     if (gameState.phase !== "setup") {
       console.warn("Cannot update players outside setup phase");
@@ -299,6 +346,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("distribute_roles", () => {
+    if (!checkSocketRateLimit(socket.id, "distribute_roles")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded distribute_roles limit`);
+      return;
+    }
+
     // Only allow during setup phase
     if (gameState.phase !== "setup") {
       console.warn("Cannot distribute roles outside setup phase");
@@ -358,6 +410,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("start_game", () => {
+    if (!checkSocketRateLimit(socket.id, "start_game")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded start_game limit`);
+      return;
+    }
+
     // Only allow from setup phase
     if (gameState.phase !== "setup") {
       console.warn("Cannot start game from phase:", gameState.phase);
@@ -393,6 +450,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("change_phase", (newPhase: "setup" | "day" | "night") => {
+    if (!checkSocketRateLimit(socket.id, "change_phase")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded change_phase limit`);
+      return;
+    }
+
     // Validate new phase
     if (!isValidPhase(newPhase)) {
       console.warn("Invalid phase:", newPhase);
@@ -526,6 +588,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("queue_night_action", (actionData: NightAction) => {
+    if (!checkSocketRateLimit(socket.id, "queue_night_action")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded queue_night_action limit`);
+      return;
+    }
+
     // Validate phase
     if (gameState.phase !== "night") {
       console.warn("queue_night_action called outside night phase");
@@ -565,6 +632,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("use_one_time", (abilityId: string) => {
+    if (!checkSocketRateLimit(socket.id, "use_one_time")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded use_one_time limit`);
+      return;
+    }
+
     if (typeof abilityId !== "string" || !abilityId) {
       console.warn("Invalid ability ID:", abilityId);
       return;
@@ -580,6 +652,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("set_matias_target", (targetId: string) => {
+    if (!checkSocketRateLimit(socket.id, "set_matias_target")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded set_matias_target limit`);
+      return;
+    }
+
     if (!isValidPlayerId(targetId, gameState)) {
       console.warn("Invalid Matias target:", targetId);
       return;
@@ -595,6 +672,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("toggle_reveal", (targetId: string) => {
+    if (!checkSocketRateLimit(socket.id, "toggle_reveal")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded toggle_reveal limit`);
+      return;
+    }
+
     if (!isValidPlayerId(targetId, gameState)) {
       console.warn("Invalid toggle_reveal target:", targetId);
       return;
@@ -608,6 +690,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("execute_action", (actionData: any) => {
+    if (!checkSocketRateLimit(socket.id, "execute_action")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded execute_action limit`);
+      return;
+    }
+
     // Validate action data
     if (!actionData?.type || !actionData?.targetId) {
       console.warn("Invalid execute_action data:", actionData);
@@ -664,6 +751,11 @@ io.on("connection", (socket) => {
   });
 
   socket.on("reset_game", () => {
+    if (!checkSocketRateLimit(socket.id, "reset_game")) {
+      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded reset_game limit`);
+      return;
+    }
+
     if (timerInterval) {
       clearInterval(timerInterval);
       timerInterval = null;
