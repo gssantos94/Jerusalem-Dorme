@@ -8,10 +8,9 @@
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "tsx watch src/server.ts",
     "dev:frontend": "cd frontend && npm run dev",
-    "build": "npm run build:ci",
-    "build:ci": "npm run build:frontend && npm run build:backend",
-    "build:frontend": "npm --prefix frontend install && npm --prefix frontend run build",
-    "build:backend": "tsc",
+    "build": "bash build.sh",
+    "build:frontend": "npm --prefix frontend install && npm --prefix frontend exec vite build",
+    "build:backend": "npx tsc",
     "postinstall": "npm --prefix frontend install || true"
   },
   "keywords": [],
