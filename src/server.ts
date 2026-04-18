@@ -11,6 +11,9 @@ dotenv.config();
 
 const app = express();
 
+// Trust proxy for Railway (and other reverse proxies)
+app.set("trust proxy", 1);
+
 // CORS configuration from environment
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) || [
   "http://localhost:3000",
@@ -960,7 +963,7 @@ io.on("connection", (socket) => {
   });
 });
 
-const frontendPath = path.join(__dirname, "../../frontend/dist");
+const frontendPath = path.join(__dirname, "../frontend/dist");
 app.use(express.static(frontendPath));
 
 // Endpoint to retrieve game logs (useful for debugging)
