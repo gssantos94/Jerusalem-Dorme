@@ -93,9 +93,10 @@
 3. **Configurar**
    - Name: `jerusalem-dorme`
    - Runtime: `Node`
-   - Build Command: `npm install && npm run build`
+   - **Build Command:** `npm run build:ci`
    - Start Command: `npm start`
    - Plan: `Free`
+   - Node Version: `22` (ou deixe default)
 
 4. **Environment Variables**
 
