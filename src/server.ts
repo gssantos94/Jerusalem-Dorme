@@ -5,6 +5,7 @@ import cors from "cors";
 import path from "path";
 import dotenv from "dotenv";
 import rateLimit from "express-rate-limit";
+import { z } from "zod";
 
 dotenv.config();
 
@@ -122,6 +123,54 @@ const checkSocketRateLimit = (socketId: string, eventName: string): boolean => {
   return socketEventCounts[socketId][key] <= SOCKET_RATE_LIMIT_MAX;
 };
 
+// Zod schemas for Socket.IO event validation
+const PhaseSchema = z.enum(["setup", "day", "night"]);
+const DeathReasonSchema = z.enum(["eliminado", "expulso"]).nullable();
+
+const PlayerSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  roleId: z.string().nullable(),
+  isAlive: z.boolean(),
+  isRevealed: z.boolean(),
+  deathReason: DeathReasonSchema.optional(),
+});
+
+const NightActionSchema = z.object({
+  sourceRoleId: z.string().min(1),
+  targetId: z.string().min(1),
+  actionType: z.string().min(1),
+});
+
+const GameStateSchema = z.object({
+  phase: PhaseSchema,
+  players: z.array(PlayerSchema),
+  timer: z.number().nullable(),
+  nightActions: z.array(NightActionSchema),
+  logs: z.array(z.string()),
+  usedOneTimeAbilities: z.record(z.string(), z.boolean()),
+  pedroLastProtectedId: z.string().nullable(),
+  jesusSacrificed: z.boolean(),
+  matiasTargetId: z.string().nullable(),
+  dayCount: z.number().nonnegative().int(),
+  winnerMessage: z.string().nullable(),
+});
+
+// Event payload schemas
+const UpdatePlayersSchema = z.array(PlayerSchema);
+const DistributeRolesSchema = z.object({});
+const StartGameSchema = z.object({});
+const ChangePhasSchema = PhaseSchema;
+const QueueNightActionSchema = NightActionSchema;
+const ExecuteActionSchema = z.object({
+  type: z.string().min(1),
+  targetId: z.string().min(1),
+});
+const UseOneTimeSchema = z.string().min(1);
+const SetMatiasTargetSchema = z.string().min(1);
+const ToggleRevealSchema = z.string().min(1);
+const ResetGameSchema = z.object({});
+
 export interface GameState {
   phase: "setup" | "day" | "night";
   players: Player[];
@@ -151,6 +200,19 @@ let gameState: GameState = {
 };
 
 let timerInterval: NodeJS.Timeout | null = null;
+
+// Helper function for validating with zod schemas
+const validatePayload = <T>(data: unknown, schema: z.ZodSchema<T>): T | null => {
+  try {
+    return schema.parse(data);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      console.warn(`Validation error: ${error.message}`);
+      return null;
+    }
+    throw error;
+  }
+};
 
 function checkWinCondition() {
   if (
@@ -311,37 +373,20 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // Validate with zod schema
+    const validated = validatePayload(newPlayers, UpdatePlayersSchema);
+    if (!validated) {
+      console.warn("Invalid newPlayers payload");
+      return;
+    }
+
     // Only allow updates during setup phase
     if (gameState.phase !== "setup") {
       console.warn("Cannot update players outside setup phase");
       return;
     }
 
-    // Validate input is array
-    if (!Array.isArray(newPlayers)) {
-      console.warn("Invalid newPlayers: not an array");
-      return;
-    }
-
-    // Validate each player has required fields
-    const isValidPlayer = (p: any): p is Player => {
-      return (
-        typeof p === "object" &&
-        p !== null &&
-        typeof p.id === "string" &&
-        typeof p.name === "string" &&
-        p.id && // Non-empty
-        p.name && // Non-empty
-        typeof p.isAlive === "boolean"
-      );
-    };
-
-    if (!newPlayers.every(isValidPlayer)) {
-      console.warn("Invalid player data in newPlayers");
-      return;
-    }
-
-    gameState.players = newPlayers;
+    gameState.players = validated;
     io.emit("game_state_update", gameState);
   });
 
@@ -455,19 +500,20 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Validate new phase
-    if (!isValidPhase(newPhase)) {
-      console.warn("Invalid phase:", newPhase);
+    // Validate with zod schema
+    const validated = validatePayload(newPhase, ChangePhasSchema);
+    if (!validated) {
+      console.warn("Invalid phase payload");
       return;
     }
 
     // Validate phase transition
-    if (!isValidPhaseTransition(gameState.phase, newPhase)) {
-      console.warn(`Invalid transition from ${gameState.phase} to ${newPhase}`);
+    if (!isValidPhaseTransition(gameState.phase, validated)) {
+      console.warn(`Invalid transition from ${gameState.phase} to ${validated}`);
       return;
     }
 
-    if (newPhase === "day" && gameState.phase === "night") {
+    if (validated === "day" && gameState.phase === "night") {
       gameState.dayCount++;
       const actions = gameState.nightActions;
 
@@ -577,12 +623,12 @@ io.on("connection", (socket) => {
       }, 1000);
 
       io.emit("play_animations", animationEvents);
-    } else if (newPhase === "night" && gameState.phase === "day") {
+    } else if (validated === "night" && gameState.phase === "day") {
       if (timerInterval) clearInterval(timerInterval);
       gameState.timer = null;
     }
 
-    gameState.phase = newPhase;
+    gameState.phase = validated;
     checkWinCondition();
     io.emit("game_state_update", gameState);
   });
@@ -593,41 +639,41 @@ io.on("connection", (socket) => {
       return;
     }
 
+    // Validate with zod schema
+    const validated = validatePayload(actionData, QueueNightActionSchema);
+    if (!validated) {
+      console.warn("Invalid night action payload");
+      return;
+    }
+
     // Validate phase
     if (gameState.phase !== "night") {
       console.warn("queue_night_action called outside night phase");
       return;
     }
 
-    // Validate actionData structure
-    if (!actionData?.sourceRoleId || !actionData?.targetId || !actionData?.actionType) {
-      console.warn("Invalid night action data:", actionData);
-      return;
-    }
-
     // Validate source and target exist and are alive
-    const source = gameState.players.find(p => p.roleId === actionData.sourceRoleId && p.isAlive);
+    const source = gameState.players.find(p => p.roleId === validated.sourceRoleId && p.isAlive);
     if (!source) {
-      console.warn("Invalid source for night action:", actionData.sourceRoleId);
+      console.warn("Invalid source for night action:", validated.sourceRoleId);
       return;
     }
 
-    if (!isValidPlayerId(actionData.targetId, gameState)) {
-      console.warn("Invalid target player ID:", actionData.targetId);
+    if (!isValidPlayerId(validated.targetId, gameState)) {
+      console.warn("Invalid target player ID:", validated.targetId);
       return;
     }
 
-    // Only living players can be targeted (except for resurrection)
-    const target = gameState.players.find(p => p.id === actionData.targetId);
+    const target = gameState.players.find(p => p.id === validated.targetId);
     if (!target) {
-      console.warn("Target player not found:", actionData.targetId);
+      console.warn("Target player not found:", validated.targetId);
       return;
     }
 
     gameState.nightActions = gameState.nightActions.filter(
-      (a) => a.sourceRoleId !== actionData.sourceRoleId,
+      (a) => a.sourceRoleId !== validated.sourceRoleId,
     );
-    gameState.nightActions.push(actionData);
+    gameState.nightActions.push(validated);
     io.emit("game_state_update", gameState);
   });
 
@@ -637,17 +683,19 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (typeof abilityId !== "string" || !abilityId) {
-      console.warn("Invalid ability ID:", abilityId);
+    // Validate with zod schema
+    const validated = validatePayload(abilityId, UseOneTimeSchema);
+    if (!validated) {
+      console.warn("Invalid ability ID payload");
       return;
     }
     
-    if (gameState.usedOneTimeAbilities[abilityId]) {
-      console.warn("Ability already used:", abilityId);
+    if (gameState.usedOneTimeAbilities[validated]) {
+      console.warn("Ability already used:", validated);
       return;
     }
     
-    gameState.usedOneTimeAbilities[abilityId] = true;
+    gameState.usedOneTimeAbilities[validated] = true;
     io.emit("game_state_update", gameState);
   });
 
@@ -657,17 +705,24 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (!isValidPlayerId(targetId, gameState)) {
-      console.warn("Invalid Matias target:", targetId);
+    // Validate with zod schema
+    const validated = validatePayload(targetId, SetMatiasTargetSchema);
+    if (!validated) {
+      console.warn("Invalid Matias target payload");
+      return;
+    }
+
+    if (!isValidPlayerId(validated, gameState)) {
+      console.warn("Invalid Matias target:", validated);
       return;
     }
     
-    if (!isPlayerAlive(targetId, gameState)) {
-      console.warn("Matias target is not alive:", targetId);
+    if (!isPlayerAlive(validated, gameState)) {
+      console.warn("Matias target is not alive:", validated);
       return;
     }
     
-    gameState.matiasTargetId = targetId;
+    gameState.matiasTargetId = validated;
     io.emit("game_state_update", gameState);
   });
 
@@ -677,12 +732,19 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (!isValidPlayerId(targetId, gameState)) {
-      console.warn("Invalid toggle_reveal target:", targetId);
+    // Validate with zod schema
+    const validated = validatePayload(targetId, ToggleRevealSchema);
+    if (!validated) {
+      console.warn("Invalid toggle_reveal target payload");
+      return;
+    }
+
+    if (!isValidPlayerId(validated, gameState)) {
+      console.warn("Invalid toggle_reveal target:", validated);
       return;
     }
     
-    const target = gameState.players.find((p) => p.id === targetId);
+    const target = gameState.players.find((p) => p.id === validated);
     if (target) {
       target.isRevealed = !target.isRevealed;
       io.emit("game_state_update", gameState);
@@ -695,54 +757,55 @@ io.on("connection", (socket) => {
       return;
     }
 
-    // Validate action data
-    if (!actionData?.type || !actionData?.targetId) {
-      console.warn("Invalid execute_action data:", actionData);
+    // Validate with zod schema
+    const validated = validatePayload(actionData, ExecuteActionSchema);
+    if (!validated) {
+      console.warn("Invalid execute_action payload");
       return;
     }
 
     // Validate target exists
-    if (!isValidPlayerId(actionData.targetId, gameState)) {
-      console.warn("Invalid execute_action target:", actionData.targetId);
+    if (!isValidPlayerId(validated.targetId, gameState)) {
+      console.warn("Invalid execute_action target:", validated.targetId);
       return;
     }
 
-    const target = gameState.players.find(p => p.id === actionData.targetId);
+    const target = gameState.players.find(p => p.id === validated.targetId);
     if (!target) {
-      console.warn("Target not found:", actionData.targetId);
+      console.warn("Target not found:", validated.targetId);
       return;
     }
 
-    if (actionData.type === "kill") {
+    if (validated.type === "kill") {
       if (!target.isAlive) {
-        console.warn("Cannot kill already dead player:", actionData.targetId);
+        console.warn("Cannot kill already dead player:", validated.targetId);
         return;
       }
-      killPlayer(actionData.targetId, "eliminado", []);
+      killPlayer(validated.targetId, "eliminado", []);
       io.emit("play_animations", [
-        { targetId: actionData.targetId, type: "attack" },
+        { targetId: validated.targetId, type: "attack" },
       ]);
-    } else if (actionData.type === "expel") {
+    } else if (validated.type === "expel") {
       if (!target.isAlive) {
-        console.warn("Cannot expel already dead player:", actionData.targetId);
+        console.warn("Cannot expel already dead player:", validated.targetId);
         return;
       }
-      killPlayer(actionData.targetId, "expulso", []);
+      killPlayer(validated.targetId, "expulso", []);
       io.emit("play_animations", [
-        { targetId: actionData.targetId, type: "expel" },
+        { targetId: validated.targetId, type: "expel" },
       ]);
-    } else if (actionData.type === "revive") {
+    } else if (validated.type === "revive") {
       if (target.isAlive) {
-        console.warn("Cannot revive already alive player:", actionData.targetId);
+        console.warn("Cannot revive already alive player:", validated.targetId);
         return;
       }
       target.isAlive = true;
       target.deathReason = null;
       io.emit("play_animations", [
-        { targetId: actionData.targetId, type: "revive" },
+        { targetId: validated.targetId, type: "revive" },
       ]);
     } else {
-      console.warn("Unknown action type:", actionData.type);
+      console.warn("Unknown action type:", validated.type);
       return;
     }
     
