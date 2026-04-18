@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: jerusalem-dorme
+    env: node
+    region: ohio
+    plan: free
+
+    # GitHub repository
+    repo: https://github.com/gssantos94/Jerusalem-Dorme
+    branch: main
+
+    # Build configuration
+    buildCommand: npm run build
+
+    # Start command
+    startCommand: npm start
+
+    # Environment variables
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: GAME_TIMEOUT_MINUTES
+        value: "5"
+      - key: ALLOWED_ORIGINS
+        scope: build
+        # Will be set in Render dashboard to your actual URL
+
+    # Healthcheck
+    healthCheckPath: /api/logs
+
+    # Node version
+    nodeVersion: 22
