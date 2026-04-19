@@ -726,13 +726,14 @@ export default function App() {
       reconnectionDelayMax: 5000,
       reconnectionAttempts: 10,
       timeout: 20000,
-      transports: ["websocket", "polling"],
+      transports: ["websocket"],
     });
 
     setSocket(newSocket);
 
     newSocket.on("connect", () => {
       console.log("[Socket.io] ✓ Conectado");
+      newSocket.emit("request_state");
     });
 
     newSocket.on("game_state_update", (state: GameState) => {

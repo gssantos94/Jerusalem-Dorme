@@ -528,6 +528,10 @@ io.on("connection", (socket) => {
 
   socket.emit("game_state_update", gameState);
 
+  socket.on("request_state", () => {
+    socket.emit("game_state_update", gameState);
+  });
+
   socket.on("update_players", (newPlayers: Player[]) => {
     if (!checkSocketRateLimit(socket.id, "update_players")) {
       console.warn(
