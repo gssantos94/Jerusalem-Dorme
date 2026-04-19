@@ -172,10 +172,10 @@ export const createGameEngine = ({
         if (!target || !target.isAlive) continue;
 
         if (caredByMaria === targetId) {
-          animationEvents.push({ targetId, type: "protect" });
+          animationEvents.push({ targetId, type: "protect_maria" });
           logEvent(`Maria protects ${target.name} from shadow attack`);
         } else if (protectedByPedro === targetId) {
-          animationEvents.push({ targetId, type: "protect" });
+          animationEvents.push({ targetId, type: "protect_pedro" });
           logEvent(
             `Pedro protects ${target.name}, shadow takes random soldier`,
           );

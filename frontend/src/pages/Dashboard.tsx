@@ -164,14 +164,17 @@ export const Dashboard = () => {
 
             if (anim === "attack") {
               animClass = "animate-pulse ring-8 ring-red-500 scale-105 z-50";
-            } else if (anim === "protect") {
+            } else if (anim === "protect" || anim === "protect_pedro") {
               animClass =
-                "animate-bounce ring-8 ring-blue-500 scale-110 z-50 shadow-[0_0_40px_rgba(59,130,246,0.8)]";
+                "ring-8 ring-blue-500 scale-110 z-50 shadow-[0_0_40px_rgba(59,130,246,0.8)]";
+            } else if (anim === "protect_maria") {
+              animClass =
+                "ring-8 ring-rose-500 scale-110 z-50 shadow-[0_0_40px_rgba(244,63,94,0.8)]";
             } else if (anim === "revive") {
               animClass =
                 "ring-8 ring-yellow-400 scale-110 z-50 shadow-[0_0_40px_rgba(250,204,21,0.8)]";
             } else if (anim === "expel") {
-              animClass = "animate-bounce ring-8 ring-orange-500 z-50";
+              animClass = "expel-shake ring-8 ring-orange-500 z-50";
             }
 
             return (
@@ -187,9 +190,14 @@ export const Dashboard = () => {
                       🗡️
                     </div>
                   )}
-                  {anim === "protect" && (
+                  {(anim === "protect" || anim === "protect_pedro") && (
                     <div className="absolute inset-0 bg-blue-500/40 z-30 flex items-center justify-center text-6xl">
                       🛡️
+                    </div>
+                  )}
+                  {anim === "protect_maria" && (
+                    <div className="absolute inset-0 bg-rose-500/40 z-30 flex items-center justify-center text-6xl">
+                      ❤️
                     </div>
                   )}
                   {anim === "revive" && (
