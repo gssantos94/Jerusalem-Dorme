@@ -102,7 +102,7 @@ const ROLE_ABILITIES: Record<string, any[]> = {
   matias: [
     {
       id: "matias_escolhe",
-      label: "Substituir",
+      label: "Matias Substitui",
       icon: "🔄",
       actionType: "matias_escolhe",
       oneTime: true,
@@ -153,6 +153,37 @@ const ROLE_ABILITIES: Record<string, any[]> = {
 
 const Dashboard = () => {
   const { gameState, animations } = useGame();
+  const [announcement, setAnnouncement] = useState<{
+    text: string;
+    variant: "night" | "day" | "win";
+  } | null>(null);
+  const previousPhaseRef = useRef<GameState["phase"] | null>(null);
+  const previousWinnerRef = useRef<string | null>(null);
+  const announcementTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const showAnnouncement = (
+    text: string,
+    variant: "night" | "day" | "win",
+  ) => {
+    if (announcementTimeoutRef.current) {
+      clearTimeout(announcementTimeoutRef.current);
+    }
+    setAnnouncement({ text, variant });
+    announcementTimeoutRef.current = setTimeout(() => {
+      setAnnouncement(null);
+    }, variant === "win" ? 5000 : 2600);
+  };
+
+  const getWinnerHeadline = (winnerMessage: string): string => {
+    if (winnerMessage.includes("EQUIPE LUZ")) return "Luz Venceu!";
+    if (winnerMessage.includes("SOMBRAS")) return "Sombras Venceu!";
+    if (winnerMessage.includes("JUDAS")) return "Judas Venceu!";
+    if (winnerMessage.includes("ANANIAS E SAFIRA"))
+      return "Ananias e Safira Venceu!";
+    return "Vitória!";
+  };
 
   useEffect(() => {
     if (gameState?.phase === "night") {
@@ -162,14 +193,57 @@ const Dashboard = () => {
     }
   }, [gameState?.phase]);
 
+  useEffect(() => {
+    return () => {
+      if (announcementTimeoutRef.current) {
+        clearTimeout(announcementTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!gameState) return;
+
+    if (previousPhaseRef.current === null) {
+      previousPhaseRef.current = gameState.phase;
+      previousWinnerRef.current = gameState.winnerMessage;
+      return;
+    }
+
+    if (
+      gameState.winnerMessage &&
+      gameState.winnerMessage !== previousWinnerRef.current
+    ) {
+      showAnnouncement(getWinnerHeadline(gameState.winnerMessage), "win");
+    } else if (gameState.phase !== previousPhaseRef.current) {
+      if (gameState.phase === "night") {
+        showAnnouncement("Jerusalem Dorme", "night");
+      }
+      if (gameState.phase === "day") {
+        showAnnouncement("Jerusalem Acorda", "day");
+      }
+    }
+
+    previousPhaseRef.current = gameState.phase;
+    previousWinnerRef.current = gameState.winnerMessage;
+  }, [gameState]);
+
   if (!gameState)
     return (
       <div className="p-8 text-center text-xl">Conectando ao servidor...</div>
     );
 
   return (
-    <div className="min-h-screen flex flex-col items-center p-8 transition-colors duration-500">
-      <h1 className="text-5xl font-bold mb-4 text-center">
+    <div className="dashboard-shell min-h-screen flex flex-col items-center p-8 transition-colors duration-500 relative overflow-hidden">
+      {announcement && (
+        <div className="announcement-wrap">
+          <div className={`announcement-card ${announcement.variant}`}>
+            <h2 className="announcement-text">{announcement.text}</h2>
+          </div>
+        </div>
+      )}
+
+      <h1 className="text-5xl font-bold mb-4 text-center dashboard-title">
         {gameState.phase === "night"
           ? "Jerusalem Dorme..."
           : gameState.phase === "day"
@@ -178,7 +252,7 @@ const Dashboard = () => {
       </h1>
 
       {gameState.winnerMessage && (
-        <div className="w-full max-w-4xl bg-yellow-400 text-yellow-900 p-6 rounded-2xl shadow-2xl mb-8 text-center border-4 border-yellow-500 animate-bounce z-50">
+        <div className="w-full max-w-4xl bg-yellow-400/95 text-yellow-900 p-6 rounded-2xl shadow-2xl mb-8 text-center border-4 border-yellow-500 animate-bounce z-50 winner-banner">
           <h2 className="text-2xl sm:text-4xl font-bold uppercase tracking-wider">
             {gameState.winnerMessage}
           </h2>
@@ -228,10 +302,10 @@ const Dashboard = () => {
             return (
               <div
                 key={player.id}
-                className={`relative flex flex-col items-center justify-start transition-all duration-500 flex-grow min-w-[120px] max-w-[250px] basis-[calc(50%-1rem)] sm:basis-[calc(33%-1rem)] md:basis-[calc(25%-1.5rem)] lg:basis-[calc(20%-2rem)] min-[1920px]:basis-[calc(10%-2rem)] ${animClass} ${player.isAlive ? "opacity-100" : "opacity-60"}`}
+                className={`player-card relative flex flex-col items-center justify-start transition-all duration-500 flex-grow min-w-[120px] max-w-[250px] basis-[calc(50%-1rem)] sm:basis-[calc(33%-1rem)] md:basis-[calc(25%-1.5rem)] lg:basis-[calc(20%-2rem)] min-[1920px]:basis-[calc(10%-2rem)] ${animClass} ${player.isAlive ? "opacity-100" : "opacity-60"}`}
               >
                 <div
-                  className={`w-full aspect-[2/3] rounded-xl border-4 ${player.isAlive ? "border-slate-400" : "border-red-900"} flex items-center justify-center overflow-hidden relative shadow-2xl bg-slate-800`}
+                  className={`w-full aspect-[2/3] rounded-xl border-4 ${player.isAlive ? "border-slate-300" : "border-red-900"} flex items-center justify-center overflow-hidden relative shadow-2xl bg-slate-800 card-face`}
                 >
                   {anim === "attack" && (
                     <div className="absolute inset-0 bg-red-500/60 z-30 flex items-center justify-center text-6xl">

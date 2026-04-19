@@ -267,7 +267,10 @@ function executeNextNightAction(): {
   gameState.nightTurnIndex++;
 
   // Find and execute actions for this role
-  const roleActions = actions.filter((a) => a.sourceRoleId === currentRoleId);
+  const roleActions =
+    currentRoleId === "sombra_ataca"
+      ? actions.filter((a) => a.actionType === "sombra_ataca")
+      : actions.filter((a) => a.sourceRoleId === currentRoleId);
 
   if (currentRoleId === "simao_zelote") {
     const simaoKill = roleActions[0]?.targetId;
@@ -700,7 +703,7 @@ io.on("connection", (socket) => {
     if (validated === "day" && gameState.phase === "night") {
       gameState.dayCount++;
 
-      // Initialize night turn system to process all actions in order
+      // Resolve all queued night actions before sunrise.
       gameState.nightTurnIndex = 0;
       gameState.nightTurns = [
         "simao_zelote",
@@ -709,6 +712,21 @@ io.on("connection", (socket) => {
         "pedro",
         "jesus",
       ];
+
+      const allAnimationEvents: any[] = [];
+      while (true) {
+        const { animationEvents, complete } = executeNextNightAction();
+        if (animationEvents.length > 0) {
+          allAnimationEvents.push(...animationEvents);
+        }
+        if (complete) break;
+      }
+
+      if (allAnimationEvents.length > 0) {
+        io.emit("play_animations", allAnimationEvents);
+      }
+
+      checkWinCondition();
 
       // Start 5-minute timer with synchronization timestamp
       if (timerInterval) clearInterval(timerInterval);
