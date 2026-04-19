@@ -1,6 +1,6 @@
-@import "tailwindcss";
-
 @import url("https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Unbounded:wght@500;700;900&display=swap");
+
+@import "tailwindcss";
 
 html,
 body,

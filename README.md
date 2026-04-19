@@ -9,6 +9,10 @@
 
 O app funciona em tempo real via WebSocket (Socket.IO), com estado em memoria no backend.
 
+Documentacao de apoio:
+
+- `docs/ARCHITECTURE.md`: escopo e responsabilidade por pasta
+
 ## 2) Arquitetura tecnica
 
 ### Backend
@@ -17,7 +21,13 @@ O app funciona em tempo real via WebSocket (Socket.IO), com estado em memoria no
 - Runtime: Node.js
 - Framework HTTP: Express
 - Tempo real: Socket.IO
-- Arquivo principal: `src/server.ts`
+- Bootstrap: `src/server.ts`
+- Modulos principais:
+  - `src/domain/` (tipos, constantes, estado inicial)
+  - `src/game/` (store e engine de regras)
+  - `src/socket/` (handlers de eventos)
+  - `src/validation/` (schemas Zod)
+  - `src/utils/` (logger, shuffle, rate limit)
 - Build: `tsc` para `dist/server.js`
 - Execucao prod: `npm start` (porta padrao `3000`)
 
@@ -28,7 +38,11 @@ O app funciona em tempo real via WebSocket (Socket.IO), com estado em memoria no
 - Roteamento: React Router
 - Realtime client: `socket.io-client`
 - Estilo: Tailwind CSS v4 + classes utilitarias
-- Arquivo principal da app: `frontend/src/App.tsx`
+- Entradas principais:
+  - `frontend/src/App.tsx` (rotas)
+  - `frontend/src/context/game-context.tsx` (estado global Socket.IO)
+  - `frontend/src/pages/` (Dashboard e Admin)
+  - `frontend/src/constants/role-abilities.ts` (habilidades por papel)
 
 ### Scripts principais (raiz)
 
@@ -173,6 +187,7 @@ Ao `change_phase('day')`:
 5. Cliente pode chamar `next_night_turn` repetidamente para processar cada turno sequencialmente.
 
 **Ordem de resolucao noturna:**
+
 - **Turno 1**: Simão Zelote (`simao_elimina`)
 - **Turno 2**: Sombras (`sombra_ataca`) com interacoes Maria/Pedro
 - **Turno 3**: Maria Madalena (processada junto com sombras)
@@ -283,33 +298,39 @@ Para build/producao:
 **Session 2 Improvements:**
 
 ### Seguranca
+
 - ✅ **Rate Limiting**: HTTP 100/min + Socket.IO 10/sec (prevent DDoS/spam)
 - ✅ **Input Validation**: Zod schemas em todos os 11+ handlers Socket.IO
 - ✅ **CORS Configuravel**: Environment-based allowed origins
 
 ### Confiabilidade
+
 - ✅ **Timer Sincronizado**: Client-server sync via `timerStartedAt` (elimina drift)
 - ✅ **Memory Leak Fixes**: Limpeza correta de timers em todas as transicoes
 - ✅ **Auto-Reconnect**: Socket.IO com retry automático em desconexões
-- ✅ **React.StrictMode Fix**: useRef para evitar duplicate connections em dev
+- ✅ **React.StrictMode Fix**: conexão Socket.IO compartilhada para evitar duplicidade em dev
 
 ### Observabilidade
+
 - ✅ **Game Event Logging**: 100 eventos recentes com timestamp ISO
 - ✅ **Logs Endpoint**: `GET /api/logs` para debug e analise pos-jogo
 - ✅ **Structured Logging**: Contexto completo em cada evento (roles, targets, etc)
 
 ### Game Logic
+
 - ✅ **Night Turn State Machine**: Processamento sequencial de acoes noturnas
 - ✅ **Per-Turn Animations**: Cada turno gera animacoes individuais
 - ✅ **Ordered Execution**: Simao → Sombras → Maria → Pedro → Jesus
 
 ### Code Quality
+
 - ✅ Fisher-Yates shuffle (probabilidade uniforme)
 - ✅ Ananias/Safira deterministica com 7+ players
 - ✅ Semantic commits com trailers Co-authored-by
 - ✅ TypeScript strict mode + Zod validation
 
 ### Deployment
+
 - ✅ Develop branch workflow (main <- PR from develop)
 - ✅ Environment configuration (.env / .env.example)
 - ✅ Build validation (npm run build)
