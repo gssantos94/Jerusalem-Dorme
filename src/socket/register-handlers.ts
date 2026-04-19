@@ -1,5 +1,5 @@
 import { Server } from "socket.io";
-import { NIGHT_ACTION_ORDER, UNIQUE_ROLES } from "../domain/constants";
+import { NIGHT_ACTION_ORDER } from "../domain/constants";
 import { createInitialGameState } from "../domain/state";
 import { GamePhase, NightAction, Player } from "../domain/types";
 import {
@@ -28,6 +28,72 @@ interface RegisterSocketHandlersDeps {
   rateLimiter: SocketRateLimiter;
   logEvent: (message: string) => void;
 }
+
+const MIN_PLAYERS_TO_START = 6;
+
+const CORE_LIGHT_ROLES = ["jesus", "pedro", "maria_madalena"];
+const SUPPORT_LIGHT_ROLES = [
+  "joao",
+  "tome",
+  "nicodemos",
+  "zaqueu",
+  "jose_de_arimateia",
+  "o_publicano",
+  "matias",
+];
+const CORE_SHADOW_ROLES = ["fariseu", "sumo_sacerdote", "rei_herodes"];
+const SHADOW_FILLER_ROLE = "soldado_romano";
+const SINGLE_NEUTRAL_ROLE = "judas";
+const NEUTRAL_COUPLE_ROLES = ["ananias", "safira"];
+
+const buildBalancedRoles = (playerCount: number): string[] => {
+  const rolesToAssign: string[] = [];
+  const shadowCorePool = shuffle([...CORE_SHADOW_ROLES]);
+  const supportLightPool = shuffle([...SUPPORT_LIGHT_ROLES]);
+  const shadowReservePool = [...shadowCorePool.slice(2), SHADOW_FILLER_ROLE];
+
+  rolesToAssign.push(...CORE_LIGHT_ROLES);
+  rolesToAssign.push(...shadowCorePool.slice(0, 2));
+  rolesToAssign.push(SINGLE_NEUTRAL_ROLE);
+
+  const counts = { luz: 3, sombra: 2, neutro: 1 };
+  let remainingSlots = playerCount - rolesToAssign.length;
+
+  // Couple only enters with more players and always together.
+  if (playerCount >= 8 && remainingSlots >= 1) {
+    const judasIndex = rolesToAssign.indexOf(SINGLE_NEUTRAL_ROLE);
+    if (judasIndex >= 0) {
+      rolesToAssign.splice(judasIndex, 1);
+    }
+
+    rolesToAssign.push(...NEUTRAL_COUPLE_ROLES);
+    counts.neutro = 2;
+    remainingSlots -= 1;
+  }
+
+  while (remainingSlots > 0) {
+    const shouldAddShadow = counts.sombra < counts.luz;
+
+    if (shouldAddShadow) {
+      const nextShadowRole = shadowReservePool.shift() ?? SHADOW_FILLER_ROLE;
+      rolesToAssign.push(nextShadowRole);
+      counts.sombra += 1;
+    } else {
+      const nextLightRole = supportLightPool.shift();
+      if (nextLightRole) {
+        rolesToAssign.push(nextLightRole);
+        counts.luz += 1;
+      } else {
+        rolesToAssign.push(SHADOW_FILLER_ROLE);
+        counts.sombra += 1;
+      }
+    }
+
+    remainingSlots -= 1;
+  }
+
+  return shuffle(rolesToAssign);
+};
 
 export const registerSocketHandlers = ({
   io,
@@ -72,6 +138,17 @@ export const registerSocketHandlers = ({
     return true;
   };
 
+  const shouldBlockAfterWinner = (eventName: string): boolean => {
+    if (!store.gameState.winnerMessage) {
+      return false;
+    }
+
+    console.warn(
+      `[GAME LOCKED] Ignoring ${eventName}: game already has a winner`,
+    );
+    return true;
+  };
+
   const gameEngine = createGameEngine({
     store,
     logEvent,
@@ -89,6 +166,7 @@ export const registerSocketHandlers = ({
 
     socket.on("update_players", (newPlayers: Player[]) => {
       if (!validateRateLimit(socket.id, "update_players")) return;
+      if (shouldBlockAfterWinner("update_players")) return;
 
       const validated = validatePayload(newPlayers, UpdatePlayersSchema);
       if (!validated) {
@@ -110,33 +188,21 @@ export const registerSocketHandlers = ({
 
     socket.on("distribute_roles", () => {
       if (!validateRateLimit(socket.id, "distribute_roles")) return;
+      if (shouldBlockAfterWinner("distribute_roles")) return;
 
       if (store.gameState.phase !== "setup") {
         console.warn("Cannot distribute roles outside setup phase");
         return;
       }
 
-      if (store.gameState.players.length === 0) {
-        console.warn("Cannot distribute roles: no players");
+      if (store.gameState.players.length < MIN_PLAYERS_TO_START) {
+        console.warn(
+          `Cannot distribute roles: minimum is ${MIN_PLAYERS_TO_START} players`,
+        );
         return;
       }
 
-      const rolesToAssign: string[] = [];
-
-      if (store.gameState.players.length >= 7) {
-        rolesToAssign.push("ananias", "safira");
-      }
-
-      const shuffledUniqueRoles = shuffle([...UNIQUE_ROLES]);
-      while (rolesToAssign.length < store.gameState.players.length) {
-        if (shuffledUniqueRoles.length > 0) {
-          rolesToAssign.push(shuffledUniqueRoles.pop()!);
-        } else {
-          rolesToAssign.push("soldado_romano");
-        }
-      }
-
-      const finalRoles = shuffle(rolesToAssign);
+      const finalRoles = buildBalancedRoles(store.gameState.players.length);
       store.gameState.players = store.gameState.players.map(
         (player, index) => ({
           ...player,
@@ -153,14 +219,17 @@ export const registerSocketHandlers = ({
 
     socket.on("start_game", () => {
       if (!validateRateLimit(socket.id, "start_game")) return;
+      if (shouldBlockAfterWinner("start_game")) return;
 
       if (store.gameState.phase !== "setup") {
         console.warn("Cannot start game from phase:", store.gameState.phase);
         return;
       }
 
-      if (store.gameState.players.length === 0) {
-        console.warn("Cannot start game: no players");
+      if (store.gameState.players.length < MIN_PLAYERS_TO_START) {
+        console.warn(
+          `Cannot start game: minimum is ${MIN_PLAYERS_TO_START} players`,
+        );
         return;
       }
 
@@ -182,6 +251,7 @@ export const registerSocketHandlers = ({
       store.gameState.dayCount = 0;
       store.gameState.nightTurnIndex = 0;
       store.gameState.nightTurns = [];
+      store.gameState.winnerMessage = null;
 
       logEvent(`Game started with ${store.gameState.players.length} players`);
       emitState();
@@ -189,6 +259,7 @@ export const registerSocketHandlers = ({
 
     socket.on("change_phase", (newPhase: GamePhase) => {
       if (!validateRateLimit(socket.id, "change_phase")) return;
+      if (shouldBlockAfterWinner("change_phase")) return;
 
       const validated = validatePayload(newPhase, PhaseSchema);
       if (!validated) {
@@ -224,7 +295,9 @@ export const registerSocketHandlers = ({
         }
 
         gameEngine.checkWinCondition();
-        startDayTimer();
+        if (!store.gameState.winnerMessage) {
+          startDayTimer();
+        }
       } else if (validated === "night" && store.gameState.phase === "day") {
         stopTimer();
         store.gameState.timer = null;
@@ -243,6 +316,7 @@ export const registerSocketHandlers = ({
 
     socket.on("queue_night_action", (actionData: NightAction) => {
       if (!validateRateLimit(socket.id, "queue_night_action")) return;
+      if (shouldBlockAfterWinner("queue_night_action")) return;
 
       const validated = validatePayload(actionData, NightActionSchema);
       if (!validated) {
@@ -292,6 +366,7 @@ export const registerSocketHandlers = ({
 
     socket.on("use_one_time", (abilityId: string) => {
       if (!validateRateLimit(socket.id, "use_one_time")) return;
+      if (shouldBlockAfterWinner("use_one_time")) return;
 
       const validated = validatePayload(abilityId, UseOneTimeSchema);
       if (!validated) {
@@ -311,6 +386,7 @@ export const registerSocketHandlers = ({
 
     socket.on("set_matias_target", (targetId: string) => {
       if (!validateRateLimit(socket.id, "set_matias_target")) return;
+      if (shouldBlockAfterWinner("set_matias_target")) return;
 
       const validated = validatePayload(targetId, SetMatiasTargetSchema);
       if (!validated) {
@@ -338,6 +414,7 @@ export const registerSocketHandlers = ({
 
     socket.on("toggle_reveal", (targetId: string) => {
       if (!validateRateLimit(socket.id, "toggle_reveal")) return;
+      if (shouldBlockAfterWinner("toggle_reveal")) return;
 
       const validated = validatePayload(targetId, ToggleRevealSchema);
       if (!validated) {
@@ -362,6 +439,7 @@ export const registerSocketHandlers = ({
 
     socket.on("execute_action", (actionData: unknown) => {
       if (!validateRateLimit(socket.id, "execute_action")) return;
+      if (shouldBlockAfterWinner("execute_action")) return;
 
       const validated = validatePayload(actionData, ExecuteActionSchema);
       if (!validated) {
@@ -431,6 +509,8 @@ export const registerSocketHandlers = ({
     });
 
     socket.on("next_night_turn", () => {
+      if (shouldBlockAfterWinner("next_night_turn")) return;
+
       if (store.gameState.phase !== "night") {
         console.warn("next_night_turn called outside night phase");
         return;

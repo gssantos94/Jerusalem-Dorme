@@ -4,7 +4,7 @@ export const ROLE_ABILITIES: RoleAbilities = {
   jesus: [
     {
       id: "jesus_revive",
-      label: "Ressuscitar",
+      label: "Carta: Ressuscitar",
       icon: "✨",
       actionType: "jesus_revive",
       oneTime: true,

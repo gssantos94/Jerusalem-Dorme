@@ -5,6 +5,7 @@ import { useGame } from "../context/use-game";
 import type { GameState, Player, RoleAbility } from "../types/game";
 
 type AbilityWithSource = RoleAbility & { sourceRoleId: string };
+const MIN_PLAYERS = 6;
 
 export const Admin = () => {
   const { gameState, socket } = useGame();
@@ -48,6 +49,8 @@ export const Admin = () => {
   if (!gameState) {
     return <div className="p-4">Conectando...</div>;
   }
+
+  const isGameEnded = Boolean(gameState.winnerMessage);
 
   const activeNightOrder = [
     {
@@ -184,17 +187,21 @@ export const Admin = () => {
   };
 
   const startGame = () => {
-    if (gameState.players.length < 5) return;
+    if (gameState.players.length < MIN_PLAYERS) return;
     if (gameState.players.some((player) => !player.roleId)) return;
     socket?.emit("start_game");
   };
 
   const togglePhase = () => {
+    if (isGameEnded) return;
+
     const nextPhase = gameState.phase === "night" ? "day" : "night";
     socket?.emit("change_phase", nextPhase);
   };
 
   const handleAbilityClick = (ability: AbilityWithSource, target: Player) => {
+    if (isGameEnded) return;
+
     if (ability.id === "matias_escolhe") {
       socket?.emit("use_one_time", ability.id);
       socket?.emit("set_matias_target", target.id);
@@ -239,15 +246,15 @@ export const Admin = () => {
           <div className="flex gap-2 mt-4">
             <button
               onClick={distributeRoles}
-              disabled={gameState.players.length === 0}
-              className="flex-1 bg-amber-500 text-white py-3 rounded-lg font-bold shadow-sm"
+              disabled={gameState.players.length < MIN_PLAYERS}
+              className="flex-1 bg-amber-500 text-white py-3 rounded-lg font-bold shadow-sm disabled:opacity-50"
             >
               Cartas
             </button>
             <button
               onClick={startGame}
               disabled={
-                gameState.players.length < 5 ||
+                gameState.players.length < MIN_PLAYERS ||
                 gameState.players.some((player) => !player.roleId)
               }
               className="flex-1 bg-green-600 text-white py-3 rounded-lg font-bold shadow-sm disabled:opacity-50"
@@ -255,14 +262,24 @@ export const Admin = () => {
               Iniciar
             </button>
           </div>
+          <p className="mt-3 text-xs text-slate-500">
+            Minimo de 6 jogadores para distribuir cartas e iniciar a partida.
+          </p>
         </div>
       )}
 
       {gameState.phase !== "setup" && (
         <div className="mb-6 bg-white p-4 rounded-xl shadow-sm border sticky top-2 z-50">
+          {isGameEnded && (
+            <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
+              Partida encerrada. Todas as funcoes administrativas estao pausadas.
+              Apenas "Resetar Jogo" permanece ativo.
+            </div>
+          )}
           <button
             onClick={togglePhase}
-            className={`w-full py-4 rounded-xl font-bold shadow-md text-white transition-all text-lg ${gameState.phase === "night" ? "bg-amber-500" : "bg-indigo-800"}`}
+            disabled={isGameEnded}
+            className={`w-full py-4 rounded-xl font-bold shadow-md text-white transition-all text-lg disabled:opacity-50 disabled:cursor-not-allowed ${gameState.phase === "night" ? "bg-amber-500" : "bg-indigo-800"}`}
           >
             {gameState.phase === "night" ? "🌞 Amanhecer" : "🌙 Anoitecer"}
           </button>
@@ -274,7 +291,9 @@ export const Admin = () => {
                 </div>
                 <button
                   onClick={nextStep}
-                  disabled={activeNightStep >= activeNightOrder.length - 1}
+                  disabled={
+                    isGameEnded || activeNightStep >= activeNightOrder.length - 1
+                  }
                   className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded font-bold hover:bg-indigo-200 disabled:opacity-50"
                 >
                   Próximo →
@@ -301,6 +320,13 @@ export const Admin = () => {
         </div>
       )}
 
+      {gameState.phase !== "setup" && (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-xs text-slate-700">
+          Acoes com prefixo "Admin" sao ferramentas do mestre e nao poderes de
+          cartas.
+        </div>
+      )}
+
       <div className="space-y-3">
         {gameState.players.map((player) => (
           <div
@@ -322,7 +348,8 @@ export const Admin = () => {
                   {gameState.phase !== "setup" && (
                     <button
                       onClick={() => socket?.emit("toggle_reveal", player.id)}
-                      className="p-2 bg-slate-100 rounded-full text-slate-500 hover:text-slate-800 flex-shrink-0"
+                      disabled={isGameEnded}
+                      className="p-2 bg-slate-100 rounded-full text-slate-500 hover:text-slate-800 flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       {player.isRevealed ? (
                         <Eye size={18} className="text-indigo-600" />
@@ -351,6 +378,10 @@ export const Admin = () => {
                 >
                   Remover
                 </button>
+              ) : isGameEnded ? (
+                <div className="w-full rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 text-center">
+                  Partida encerrada. Use Resetar Jogo para uma nova rodada.
+                </div>
               ) : player.isAlive ? (
                 <>
                   {gameState.phase === "night" &&
@@ -390,7 +421,7 @@ export const Admin = () => {
                         }
                         className="bg-red-100 text-red-700 px-3 py-1.5 rounded-lg font-bold text-sm flex-1"
                       >
-                        Eliminar
+                        Admin: Eliminar
                       </button>
                       <button
                         onClick={() =>
@@ -401,7 +432,7 @@ export const Admin = () => {
                         }
                         className="bg-orange-100 text-orange-800 px-3 py-1.5 rounded-lg font-bold text-sm flex-1"
                       >
-                        Expulsar
+                        Admin: Expulsar
                       </button>
                     </>
                   )}
@@ -429,7 +460,7 @@ export const Admin = () => {
                     }
                     className="bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg font-bold text-sm flex-1"
                   >
-                    Reviver
+                    Admin: Reviver
                   </button>
                 </>
               )}
