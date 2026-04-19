@@ -192,7 +192,7 @@ const Dashboard = () => {
             {(() => {
               const syncedTimer = calculateSyncedTimer(
                 gameState.timerStartedAt,
-                gameState.timer
+                gameState.timer,
               );
               const displayTimer = syncedTimer ?? gameState.timer;
               return (
@@ -713,8 +713,7 @@ export default function App() {
   const connectingRef = useRef(false);
 
   useEffect(() => {
-    const backendUrl =
-      import.meta.env.VITE_BACKEND_URL || "http://localhost:3000";
+    const backendUrl = window.location.origin;
 
     if (socket || connectingRef.current) return; // Avoid duplicate connections
 

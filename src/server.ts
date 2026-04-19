@@ -14,14 +14,6 @@ const app = express();
 // Trust proxy for Railway (and other reverse proxies)
 app.set("trust proxy", 1);
 
-// CORS configuration from environment
-const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS?.split(",").map((o) => o.trim()) || [
-  "http://localhost:3000",
-  "http://localhost:5173",
-  "http://localhost:5174",
-  "http://localhost:5175",
-];
-
 // Rate limiting middleware for HTTP requests
 const httpLimiter = rateLimit({
   windowMs: 1 * 60 * 1000, // 1 minute
@@ -35,17 +27,17 @@ app.use(httpLimiter);
 
 app.use(
   cors({
-    origin: ALLOWED_ORIGINS,
-    credentials: true,
+    origin: true,
+    credentials: false,
   }),
 );
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: ALLOWED_ORIGINS,
+    origin: true,
     methods: ["GET", "POST"],
-    credentials: true,
+    credentials: false,
   },
 });
 
@@ -75,19 +67,24 @@ function shuffle<T>(array: T[]): T[] {
 
 // Validation helpers
 const isValidPlayerId = (playerId: string, gameState: GameState): boolean => {
-  return typeof playerId === "string" && 
-    gameState.players.some(p => p.id === playerId);
+  return (
+    typeof playerId === "string" &&
+    gameState.players.some((p) => p.id === playerId)
+  );
 };
 
 const isPlayerAlive = (playerId: string, gameState: GameState): boolean => {
-  return gameState.players.find(p => p.id === playerId)?.isAlive ?? false;
+  return gameState.players.find((p) => p.id === playerId)?.isAlive ?? false;
 };
 
 const isValidPhase = (phase: string): phase is "setup" | "day" | "night" => {
   return ["setup", "day", "night"].includes(phase);
 };
 
-const isValidPhaseTransition = (currentPhase: string, newPhase: string): boolean => {
+const isValidPhaseTransition = (
+  currentPhase: string,
+  newPhase: string,
+): boolean => {
   const transitions: Record<string, string[]> = {
     setup: ["day"],
     day: ["night", "setup"],
@@ -105,16 +102,16 @@ const checkSocketRateLimit = (socketId: string, eventName: string): boolean => {
   if (!socketEventCounts[socketId]) {
     socketEventCounts[socketId] = {};
   }
-  
+
   const now = Date.now();
   const key = `${eventName}:${Math.floor(now / SOCKET_RATE_LIMIT_WINDOW)}`;
-  
+
   if (!socketEventCounts[socketId][key]) {
     socketEventCounts[socketId][key] = 0;
   }
-  
+
   socketEventCounts[socketId][key]++;
-  
+
   // Cleanup old windows (older than 2 seconds)
   Object.keys(socketEventCounts[socketId]).forEach((k) => {
     const window = parseInt(k.split(":")[1]);
@@ -122,7 +119,7 @@ const checkSocketRateLimit = (socketId: string, eventName: string): boolean => {
       delete socketEventCounts[socketId][k];
     }
   });
-  
+
   return socketEventCounts[socketId][key] <= SOCKET_RATE_LIMIT_MAX;
 };
 
@@ -226,7 +223,10 @@ const logEvent = (message: string) => {
 };
 
 // Helper function for validating with zod schemas
-const validatePayload = <T>(data: unknown, schema: z.ZodSchema<T>): T | null => {
+const validatePayload = <T>(
+  data: unknown,
+  schema: z.ZodSchema<T>,
+): T | null => {
   try {
     return schema.parse(data);
   } catch (error) {
@@ -267,9 +267,7 @@ function executeNextNightAction(): {
   gameState.nightTurnIndex++;
 
   // Find and execute actions for this role
-  const roleActions = actions.filter(
-    (a) => a.sourceRoleId === currentRoleId
-  );
+  const roleActions = actions.filter((a) => a.sourceRoleId === currentRoleId);
 
   if (currentRoleId === "simao_zelote") {
     const simaoKill = roleActions[0]?.targetId;
@@ -482,7 +480,9 @@ function killPlayer(
   killedIds.push(targetId);
 
   const roleLabel = target.roleId ? ` (${target.roleId})` : "";
-  logEvent(`Player ${target.name}${roleLabel} was ${reason === "eliminado" ? "killed" : "expelled"}`);
+  logEvent(
+    `Player ${target.name}${roleLabel} was ${reason === "eliminado" ? "killed" : "expelled"}`,
+  );
 
   let currentRole = target.roleId;
 
@@ -530,7 +530,9 @@ io.on("connection", (socket) => {
 
   socket.on("update_players", (newPlayers: Player[]) => {
     if (!checkSocketRateLimit(socket.id, "update_players")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded update_players limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded update_players limit`,
+      );
       return;
     }
 
@@ -548,13 +550,15 @@ io.on("connection", (socket) => {
     }
 
     gameState.players = validated;
-    logEvent(`Players updated: ${validated.map(p => p.name).join(", ")}`);
+    logEvent(`Players updated: ${validated.map((p) => p.name).join(", ")}`);
     io.emit("game_state_update", gameState);
   });
 
   socket.on("distribute_roles", () => {
     if (!checkSocketRateLimit(socket.id, "distribute_roles")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded distribute_roles limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded distribute_roles limit`,
+      );
       return;
     }
 
@@ -604,7 +608,7 @@ io.on("connection", (socket) => {
         rolesToAssign.push("soldado_romano");
       }
     }
-    
+
     // Final shuffle to randomize positions
     const finalRoles = shuffle(rolesToAssign);
 
@@ -613,14 +617,18 @@ io.on("connection", (socket) => {
       roleId: finalRoles[idx],
     }));
     gameState.players = playersWithRoles;
-    const rolesSummary = gameState.players.map(p => `${p.name}=${p.roleId}`).join(", ");
+    const rolesSummary = gameState.players
+      .map((p) => `${p.name}=${p.roleId}`)
+      .join(", ");
     logEvent(`Roles distributed: ${rolesSummary}`);
     io.emit("game_state_update", gameState);
   });
 
   socket.on("start_game", () => {
     if (!checkSocketRateLimit(socket.id, "start_game")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded start_game limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded start_game limit`,
+      );
       return;
     }
 
@@ -637,7 +645,7 @@ io.on("connection", (socket) => {
     }
 
     // All players must have roles assigned
-    if (gameState.players.some(p => !p.roleId)) {
+    if (gameState.players.some((p) => !p.roleId)) {
       console.warn("Cannot start game: not all players have roles assigned");
       return;
     }
@@ -664,7 +672,9 @@ io.on("connection", (socket) => {
 
   socket.on("change_phase", (newPhase: "setup" | "day" | "night") => {
     if (!checkSocketRateLimit(socket.id, "change_phase")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded change_phase limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded change_phase limit`,
+      );
       return;
     }
 
@@ -677,13 +687,15 @@ io.on("connection", (socket) => {
 
     // Validate phase transition
     if (!isValidPhaseTransition(gameState.phase, validated)) {
-      console.warn(`Invalid transition from ${gameState.phase} to ${validated}`);
+      console.warn(
+        `Invalid transition from ${gameState.phase} to ${validated}`,
+      );
       return;
     }
 
     if (validated === "day" && gameState.phase === "night") {
       gameState.dayCount++;
-      
+
       // Initialize night turn system to process all actions in order
       gameState.nightTurnIndex = 0;
       gameState.nightTurns = [
@@ -723,7 +735,9 @@ io.on("connection", (socket) => {
 
   socket.on("queue_night_action", (actionData: NightAction) => {
     if (!checkSocketRateLimit(socket.id, "queue_night_action")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded queue_night_action limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded queue_night_action limit`,
+      );
       return;
     }
 
@@ -741,7 +755,9 @@ io.on("connection", (socket) => {
     }
 
     // Validate source and target exist and are alive
-    const source = gameState.players.find(p => p.roleId === validated.sourceRoleId && p.isAlive);
+    const source = gameState.players.find(
+      (p) => p.roleId === validated.sourceRoleId && p.isAlive,
+    );
     if (!source) {
       console.warn("Invalid source for night action:", validated.sourceRoleId);
       return;
@@ -752,7 +768,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const target = gameState.players.find(p => p.id === validated.targetId);
+    const target = gameState.players.find((p) => p.id === validated.targetId);
     if (!target) {
       console.warn("Target player not found:", validated.targetId);
       return;
@@ -762,13 +778,17 @@ io.on("connection", (socket) => {
       (a) => a.sourceRoleId !== validated.sourceRoleId,
     );
     gameState.nightActions.push(validated);
-    logEvent(`Night action queued: ${validated.sourceRoleId} -> ${validated.targetId} (${validated.actionType})`);
+    logEvent(
+      `Night action queued: ${validated.sourceRoleId} -> ${validated.targetId} (${validated.actionType})`,
+    );
     io.emit("game_state_update", gameState);
   });
 
   socket.on("use_one_time", (abilityId: string) => {
     if (!checkSocketRateLimit(socket.id, "use_one_time")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded use_one_time limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded use_one_time limit`,
+      );
       return;
     }
 
@@ -778,12 +798,12 @@ io.on("connection", (socket) => {
       console.warn("Invalid ability ID payload");
       return;
     }
-    
+
     if (gameState.usedOneTimeAbilities[validated]) {
       console.warn("Ability already used:", validated);
       return;
     }
-    
+
     gameState.usedOneTimeAbilities[validated] = true;
     logEvent(`One-time ability used: ${validated}`);
     io.emit("game_state_update", gameState);
@@ -791,7 +811,9 @@ io.on("connection", (socket) => {
 
   socket.on("set_matias_target", (targetId: string) => {
     if (!checkSocketRateLimit(socket.id, "set_matias_target")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded set_matias_target limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded set_matias_target limit`,
+      );
       return;
     }
 
@@ -806,21 +828,23 @@ io.on("connection", (socket) => {
       console.warn("Invalid Matias target:", validated);
       return;
     }
-    
+
     if (!isPlayerAlive(validated, gameState)) {
       console.warn("Matias target is not alive:", validated);
       return;
     }
-    
+
     gameState.matiasTargetId = validated;
-    const targetPlayer = gameState.players.find(p => p.id === validated);
+    const targetPlayer = gameState.players.find((p) => p.id === validated);
     logEvent(`Matias target set to ${targetPlayer?.name || validated}`);
     io.emit("game_state_update", gameState);
   });
 
   socket.on("toggle_reveal", (targetId: string) => {
     if (!checkSocketRateLimit(socket.id, "toggle_reveal")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded toggle_reveal limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded toggle_reveal limit`,
+      );
       return;
     }
 
@@ -835,7 +859,7 @@ io.on("connection", (socket) => {
       console.warn("Invalid toggle_reveal target:", validated);
       return;
     }
-    
+
     const target = gameState.players.find((p) => p.id === validated);
     if (target) {
       target.isRevealed = !target.isRevealed;
@@ -846,7 +870,9 @@ io.on("connection", (socket) => {
 
   socket.on("execute_action", (actionData: any) => {
     if (!checkSocketRateLimit(socket.id, "execute_action")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded execute_action limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded execute_action limit`,
+      );
       return;
     }
 
@@ -863,7 +889,7 @@ io.on("connection", (socket) => {
       return;
     }
 
-    const target = gameState.players.find(p => p.id === validated.targetId);
+    const target = gameState.players.find((p) => p.id === validated.targetId);
     if (!target) {
       console.warn("Target not found:", validated.targetId);
       return;
@@ -901,14 +927,16 @@ io.on("connection", (socket) => {
       console.warn("Unknown action type:", validated.type);
       return;
     }
-    
+
     checkWinCondition();
     io.emit("game_state_update", gameState);
   });
 
   socket.on("reset_game", () => {
     if (!checkSocketRateLimit(socket.id, "reset_game")) {
-      console.warn(`[RATE LIMIT] Socket ${socket.id} exceeded reset_game limit`);
+      console.warn(
+        `[RATE LIMIT] Socket ${socket.id} exceeded reset_game limit`,
+      );
       return;
     }
 
@@ -973,10 +1001,10 @@ app.get("/api/logs", (req, res) => {
     gameState: {
       phase: gameState.phase,
       playerCount: gameState.players.length,
-      alivePlayers: gameState.players.filter(p => p.isAlive).length,
+      alivePlayers: gameState.players.filter((p) => p.isAlive).length,
       dayCount: gameState.dayCount,
       winnerMessage: gameState.winnerMessage,
-    }
+    },
   });
 });
 
