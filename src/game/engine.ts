@@ -201,7 +201,19 @@ export const createGameEngine = ({
         }
       }
     } else if (currentRoleId === "maria_madalena") {
-      logEvent("Maria's action processed during shadow defense");
+      const caredByMaria = roleActions[0]?.targetId;
+      if (caredByMaria) {
+        const target = store.gameState.players.find(
+          (player) => player.id === caredByMaria,
+        );
+        if (target?.isAlive) {
+          animationEvents.push({
+            targetId: caredByMaria,
+            type: "protect_maria",
+          });
+          logEvent(`Maria cares for ${target.name}`);
+        }
+      }
     } else if (currentRoleId === "pedro") {
       const protectedByPedro = roleActions[0]?.targetId;
       if (protectedByPedro) {
@@ -209,7 +221,13 @@ export const createGameEngine = ({
         const target = store.gameState.players.find(
           (player) => player.id === protectedByPedro,
         );
-        logEvent(`Pedro protects ${target?.name}`);
+        if (target?.isAlive) {
+          animationEvents.push({
+            targetId: protectedByPedro,
+            type: "protect_pedro",
+          });
+          logEvent(`Pedro protects ${target.name}`);
+        }
       }
     } else if (currentRoleId === "jesus") {
       const jesusRevive = roleActions[0]?.targetId;

@@ -1,5 +1,5 @@
 import { Server } from "socket.io";
-import { NIGHT_ACTION_ORDER } from "../domain/constants";
+import { NIGHT_ACTION_ORDER, SOMBRA_ROLES } from "../domain/constants";
 import { createInitialGameState } from "../domain/state";
 import { GamePhase, NightAction, Player } from "../domain/types";
 import {
@@ -294,6 +294,9 @@ export const registerSocketHandlers = ({
           io.emit("play_animations", allAnimationEvents);
         }
 
+        // Night choices are only valid for one resolution cycle.
+        store.gameState.nightActions = [];
+
         gameEngine.checkWinCondition();
         if (!store.gameState.winnerMessage) {
           startDayTimer();
@@ -304,6 +307,7 @@ export const registerSocketHandlers = ({
         store.gameState.timerStartedAt = null;
         store.gameState.nightTurnIndex = 0;
         store.gameState.nightTurns = [];
+        store.gameState.nightActions = [];
       }
 
       store.gameState.phase = validated;
@@ -350,6 +354,33 @@ export const registerSocketHandlers = ({
       );
       if (!target) {
         console.warn("Target player not found:", validated.targetId);
+        return;
+      }
+
+      if (
+        validated.actionType === "sombra_ataca" &&
+        target.roleId &&
+        SOMBRA_ROLES.includes(target.roleId)
+      ) {
+        console.warn("Shadow action cannot target a shadow player");
+        return;
+      }
+
+      if (
+        validated.actionType === "simao_elimina" &&
+        target.roleId === "simao_zelote"
+      ) {
+        console.warn("Simao cannot target himself");
+        return;
+      }
+
+      if (
+        validated.actionType === "pedro_protege" &&
+        store.gameState.pedroLastProtectedId === validated.targetId
+      ) {
+        console.warn(
+          "Pedro cannot protect the same player in consecutive nights",
+        );
         return;
       }
 
@@ -526,6 +557,7 @@ export const registerSocketHandlers = ({
         logEvent("Night phase actions completed, transitioning to day");
         store.gameState.nightTurnIndex = 0;
         store.gameState.nightTurns = [];
+        store.gameState.nightActions = [];
       }
 
       emitState();

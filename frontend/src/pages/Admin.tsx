@@ -6,6 +6,12 @@ import type { GameState, Player, RoleAbility } from "../types/game";
 
 type AbilityWithSource = RoleAbility & { sourceRoleId: string };
 const MIN_PLAYERS = 6;
+const SHADOW_ROLE_IDS = new Set([
+  "rei_herodes",
+  "soldado_romano",
+  "fariseu",
+  "sumo_sacerdote",
+]);
 
 export const Admin = () => {
   const { gameState, socket } = useGame();
@@ -22,9 +28,20 @@ export const Admin = () => {
       .forEach((player) => {
         const roleAbilities = ROLE_ABILITIES[player.roleId!] || [];
         roleAbilities.forEach((ability) => {
-          if (ability.oneTime && gameState.usedOneTimeAbilities[ability.id]) {
+          const queuedThisNight = gameState.nightActions.some(
+            (nightAction) =>
+              nightAction.sourceRoleId === player.roleId &&
+              nightAction.actionType === ability.actionType,
+          );
+
+          if (
+            ability.oneTime &&
+            gameState.usedOneTimeAbilities[ability.id] &&
+            !queuedThisNight
+          ) {
             return;
           }
+
           if (!abilities.some((item) => item.id === ability.id)) {
             abilities.push({ ...ability, sourceRoleId: player.roleId! });
           }
@@ -199,16 +216,34 @@ export const Admin = () => {
     socket?.emit("change_phase", nextPhase);
   };
 
+  const canTargetPlayer = (ability: AbilityWithSource, target: Player) => {
+    if (ability.actionType === "sombra_ataca") {
+      return !target.roleId || !SHADOW_ROLE_IDS.has(target.roleId);
+    }
+
+    if (ability.actionType === "simao_elimina") {
+      return target.roleId !== "simao_zelote";
+    }
+
+    if (ability.actionType === "pedro_protege") {
+      return gameState.pedroLastProtectedId !== target.id;
+    }
+
+    return true;
+  };
+
   const handleAbilityClick = (ability: AbilityWithSource, target: Player) => {
     if (isGameEnded) return;
 
     if (ability.id === "matias_escolhe") {
-      socket?.emit("use_one_time", ability.id);
+      if (!gameState.usedOneTimeAbilities[ability.id]) {
+        socket?.emit("use_one_time", ability.id);
+      }
       socket?.emit("set_matias_target", target.id);
       return;
     }
 
-    if (ability.oneTime) {
+    if (ability.oneTime && !gameState.usedOneTimeAbilities[ability.id]) {
       socket?.emit("use_one_time", ability.id);
     }
 
@@ -272,8 +307,8 @@ export const Admin = () => {
         <div className="mb-6 bg-white p-4 rounded-xl shadow-sm border sticky top-2 z-50">
           {isGameEnded && (
             <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-              Partida encerrada. Todas as funcoes administrativas estao pausadas.
-              Apenas "Resetar Jogo" permanece ativo.
+              Partida encerrada. Todas as funcoes administrativas estao
+              pausadas. Apenas "Resetar Jogo" permanece ativo.
             </div>
           )}
           <button
@@ -292,7 +327,8 @@ export const Admin = () => {
                 <button
                   onClick={nextStep}
                   disabled={
-                    isGameEnded || activeNightStep >= activeNightOrder.length - 1
+                    isGameEnded ||
+                    activeNightStep >= activeNightOrder.length - 1
                   }
                   className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded font-bold hover:bg-indigo-200 disabled:opacity-50"
                 >
@@ -387,7 +423,10 @@ export const Admin = () => {
                   {gameState.phase === "night" &&
                     availableAbilities
                       .filter(
-                        (ability) => !ability.requiresDead && !ability.dayOnly,
+                        (ability) =>
+                          !ability.requiresDead &&
+                          !ability.dayOnly &&
+                          canTargetPlayer(ability, player),
                       )
                       .map((ability) => {
                         const isQueued = gameState.nightActions.some(
@@ -441,16 +480,28 @@ export const Admin = () => {
                 <>
                   {(gameState.phase === "night" || gameState.phase === "day") &&
                     availableAbilities
-                      .filter((ability) => ability.requiresDead)
-                      .map((ability) => (
-                        <button
-                          key={ability.id}
-                          onClick={() => handleAbilityClick(ability, player)}
-                          className="bg-yellow-100 text-yellow-800 px-3 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1 flex-1 justify-center"
-                        >
-                          {ability.icon} {ability.label}
-                        </button>
-                      ))}
+                      .filter(
+                        (ability) =>
+                          ability.requiresDead &&
+                          canTargetPlayer(ability, player),
+                      )
+                      .map((ability) => {
+                        const isQueued = gameState.nightActions.some(
+                          (nightAction) =>
+                            nightAction.sourceRoleId === ability.sourceRoleId &&
+                            nightAction.targetId === player.id,
+                        );
+
+                        return (
+                          <button
+                            key={ability.id}
+                            onClick={() => handleAbilityClick(ability, player)}
+                            className={`${isQueued ? "bg-amber-500 text-white" : "bg-yellow-100 text-yellow-800"} px-3 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1 flex-1 justify-center`}
+                          >
+                            {ability.icon} {isQueued ? "Fila" : ability.label}
+                          </button>
+                        );
+                      })}
                   <button
                     onClick={() =>
                       socket?.emit("execute_action", {
