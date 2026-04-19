@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
-html, body, #root {
+@import url("https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Unbounded:wght@500;700;900&display=swap");
+
+html,
+body,
+#root {
   height: 100%;
   width: 100%;
   margin: 0;
@@ -8,16 +12,157 @@ html, body, #root {
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: "Cinzel", Georgia, serif;
   transition: background-color 0.5s ease;
 }
 
 .night-mode {
-  background-color: #0f172a;
+  background: radial-gradient(
+    circle at 20% 20%,
+    #26304f 0%,
+    #0f172a 45%,
+    #030712 100%
+  );
   color: #f8fafc;
 }
 
 .day-mode {
-  background-color: #f8fafc;
+  background: radial-gradient(
+    circle at 10% 0%,
+    #fff6cc 0%,
+    #ffefd7 30%,
+    #f8fafc 70%
+  );
   color: #0f172a;
+}
+
+.dashboard-shell::before {
+  content: "";
+  position: absolute;
+  inset: -10%;
+  background: conic-gradient(
+    from 45deg,
+    rgba(248, 250, 252, 0.18),
+    rgba(56, 189, 248, 0.12),
+    rgba(248, 250, 252, 0.18)
+  );
+  filter: blur(40px);
+  animation: driftAura 12s linear infinite;
+  pointer-events: none;
+}
+
+.dashboard-title {
+  font-family: "Unbounded", "Cinzel", serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 0 14px rgba(148, 163, 184, 0.45);
+}
+
+.player-card {
+  transform: translateY(0);
+}
+
+.player-card:hover {
+  transform: translateY(-8px) scale(1.015);
+}
+
+.card-face {
+  box-shadow:
+    0 16px 30px rgba(2, 6, 23, 0.35),
+    inset 0 0 0 1px rgba(248, 250, 252, 0.12);
+}
+
+.winner-banner {
+  backdrop-filter: blur(4px);
+}
+
+.announcement-wrap {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 80;
+  pointer-events: none;
+  padding: 16px;
+}
+
+.announcement-card {
+  padding: clamp(18px, 3vw, 36px) clamp(20px, 4vw, 52px);
+  border-radius: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  animation:
+    revealAnnouncement 0.7s cubic-bezier(0.2, 0.8, 0.2, 1),
+    pulseAnnouncement 2.2s ease-in-out infinite;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+}
+
+.announcement-card.night {
+  background: linear-gradient(
+    135deg,
+    rgba(15, 23, 42, 0.95),
+    rgba(51, 65, 85, 0.9)
+  );
+}
+
+.announcement-card.day {
+  background: linear-gradient(
+    135deg,
+    rgba(245, 158, 11, 0.92),
+    rgba(249, 115, 22, 0.9)
+  );
+}
+
+.announcement-card.win {
+  background: linear-gradient(
+    135deg,
+    rgba(16, 185, 129, 0.9),
+    rgba(14, 165, 233, 0.9)
+  );
+}
+
+.announcement-text {
+  margin: 0;
+  font-family: "Unbounded", "Cinzel", serif;
+  font-size: clamp(2rem, 6vw, 5.2rem);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fffdf4;
+  text-align: center;
+  text-shadow: 0 4px 24px rgba(15, 23, 42, 0.65);
+}
+
+@keyframes revealAnnouncement {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.92);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes pulseAnnouncement {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+@keyframes driftAura {
+  0% {
+    transform: rotate(0deg) scale(1.1);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.25);
+  }
+  100% {
+    transform: rotate(360deg) scale(1.1);
+  }
 }
