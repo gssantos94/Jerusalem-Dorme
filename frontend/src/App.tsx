@@ -163,17 +163,17 @@ const Dashboard = () => {
     null,
   );
 
-  const showAnnouncement = (
-    text: string,
-    variant: "night" | "day" | "win",
-  ) => {
+  const showAnnouncement = (text: string, variant: "night" | "day" | "win") => {
     if (announcementTimeoutRef.current) {
       clearTimeout(announcementTimeoutRef.current);
     }
     setAnnouncement({ text, variant });
-    announcementTimeoutRef.current = setTimeout(() => {
-      setAnnouncement(null);
-    }, variant === "win" ? 5000 : 2600);
+    announcementTimeoutRef.current = setTimeout(
+      () => {
+        setAnnouncement(null);
+      },
+      variant === "win" ? 5000 : 2600,
+    );
   };
 
   const getWinnerHeadline = (winnerMessage: string): string => {
