@@ -35,7 +35,13 @@ export interface GameState {
 
 export interface AnimationEvent {
   targetId: string;
-  type: "attack" | "protect" | "revive" | "expel";
+  type:
+    | "attack"
+    | "protect"
+    | "protect_pedro"
+    | "protect_maria"
+    | "revive"
+    | "expel";
 }
 
 export interface NightTurnResolution {
